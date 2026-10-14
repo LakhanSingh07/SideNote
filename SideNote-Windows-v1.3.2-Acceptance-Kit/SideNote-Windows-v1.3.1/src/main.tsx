@@ -6,10 +6,33 @@ import { getCurrentWindow, LogicalPosition, LogicalSize, availableMonitors, curr
 import {
   Plus, Search, Pin, Archive, Trash2, Settings, Minus, X,
   StickyNote, ChevronRight, Check, CheckSquare, Square,
-  Moon, Sun, RefreshCw, Copy, Wifi, ShieldCheck, Folder, Sparkles, Move
+  Moon, Sun, RefreshCw, Copy, Wifi, ShieldCheck, Folder, Sparkles, Move,
+  Bold, Italic, Underline, Heading, List, Clock, Link as LinkIcon,
+  Mic, RotateCcw, RotateCw, Bell, BellOff, Download, Upload, Volume2
 } from 'lucide-react';
 import './style.css';
 import appLogo from './assets/logo.png';
+
+export function playReminderChime() {
+  try {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextClass) return;
+    const ctx = new AudioContextClass();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+    osc.frequency.setValueAtTime(880, ctx.currentTime + 0.12); // A5
+    gain.gain.setValueAtTime(0.35, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.7);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.7);
+  } catch (e) {
+    console.warn('Audio chime warning:', e);
+  }
+}
 
 // Note Data Model compatible with Android and Windows SQLite
 export type Note = {
@@ -229,7 +252,7 @@ async function openFloatingNote(n: Note) {
     const label = placementKey(n.id);
     const old = await safePlacement(label);
     const p = old ? await clampPlacement(old) : null;
-    await spawnWindow(label, '/?view=note&id=' + encodeURIComponent(n.id), p?.width || 310, p?.height || 330, p?.x, p?.y);
+    await spawnWindow(label, '/?view=note&id=' + encodeURIComponent(n.id), p?.width || 340, p?.height || 430, p?.x, p?.y);
   } else {
     // In web preview, fire custom event to open floating card
     window.dispatchEvent(new CustomEvent('sidenote_preview_float', { detail: n }));
@@ -294,8 +317,43 @@ function EdgeDock() {
   const notes = useNotesList();
   const [expanded, setExpanded] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
+  const [dockSide, setDockSide] = useState<'right' | 'left'>(() => {
+    return (localStorage.getItem('sidenote_dock_side') as 'right' | 'left') || 'right';
+  });
+  const [alarmBanner, setAlarmBanner] = useState<string | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const busyRef = useRef(false);
+
+  // Background reminder watcher: monitors notes and triggers pleasant chime + notification
+  useEffect(() => {
+    const checkReminders = async () => {
+      const now = Date.now();
+      for (const n of notes) {
+        if (n.reminderAt > 0 && n.reminderAt <= now && !n.archived) {
+          playReminderChime();
+          const alertTitle = n.title || 'Note reminder';
+          setAlarmBanner(`⏰ Reminder: ${alertTitle}`);
+          setTimeout(() => setAlarmBanner(null), 7000);
+          // Mark reminder as triggered to avoid looping
+          await saveNote({ ...n, reminderAt: 0, updatedAt: Date.now() });
+          await openFloatingNote(n);
+        }
+      }
+    };
+    const interval = setInterval(checkReminders, 8000);
+    return () => clearInterval(interval);
+  }, [notes]);
+
+  // Listen for dock side changes from LibraryView
+  useEffect(() => {
+    const handleSideChange = () => {
+      const side = (localStorage.getItem('sidenote_dock_side') as 'right' | 'left') || 'right';
+      setDockSide(side);
+      void adjustDockWidth(false, side);
+    };
+    window.addEventListener('sidenote_dock_side_changed', handleSideChange);
+    return () => window.removeEventListener('sidenote_dock_side_changed', handleSideChange);
+  }, []);
 
   // Filter 4 recent unarchived notes for peeking
   const peekingNotes = useMemo(() => {
@@ -305,8 +363,8 @@ function EdgeDock() {
       .slice(0, 4);
   }, [notes]);
 
-  // Position at right screen edge and handle smooth resize
-  const adjustDockWidth = async (open: boolean) => {
+  // Position at screen edge (left or right) and handle smooth resize
+  const adjustDockWidth = async (open: boolean, sideOverride?: 'right' | 'left') => {
     setExpanded(open);
     if (!native || busyRef.current) return;
     busyRef.current = true;
@@ -321,11 +379,15 @@ function EdgeDock() {
       const curY = pos.y / scale;
       const targetWidth = open ? 290 : 58;
       const targetHeight = 490;
-      const right = (mon.position.x / scale) + screenWidth;
+      const currentSide = sideOverride || dockSide;
+      
+      const targetX = currentSide === 'left' 
+        ? (mon.position.x / scale) 
+        : (mon.position.x / scale) + screenWidth - targetWidth;
       const targetY = Math.max(50, Math.min(curY, screenHeight - targetHeight - 40));
 
       await w.setSize(new LogicalSize(targetWidth, targetHeight));
-      await w.setPosition(new LogicalPosition(right - targetWidth, targetY));
+      await w.setPosition(new LogicalPosition(targetX, targetY));
     } catch (e) {
       console.warn('Dock move error', e);
     } finally {
@@ -346,12 +408,11 @@ function EdgeDock() {
   };
 
   useEffect(() => {
-    // Snap to right edge on mount
     void adjustDockWidth(false);
     return () => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
     };
-  }, []);
+  }, [dockSide]);
 
   const handleCreateNew = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -369,9 +430,16 @@ function EdgeDock() {
   };
 
   return (
-    <div className="dock-container" data-theme={theme}>
+    <div className={`dock-container ${dockSide === 'left' ? 'is-left' : ''}`} data-theme={theme}>
+      {alarmBanner && (
+        <div className="desktop-toast-banner" onClick={() => setAlarmBanner(null)}>
+          <Bell size={15} color="#FFD43B" />
+          <span>{alarmBanner}</span>
+        </div>
+      )}
+
       <aside
-        className={`dock-rail ${expanded ? 'is-expanded' : ''}`}
+        className={`dock-rail ${dockSide === 'left' ? 'is-left' : ''} ${expanded ? 'is-expanded' : ''}`}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
       >
@@ -379,7 +447,7 @@ function EdgeDock() {
         <header className="dock-header" onClick={() => void adjustDockWidth(!expanded)}>
           <BrandBadge />
           <button className="dock-collapse-btn" title="Collapse" onClick={() => void adjustDockWidth(false)}>
-            <ChevronRight size={16} />
+            <ChevronRight size={16} style={{ transform: dockSide === 'left' ? (expanded ? 'rotate(180deg)' : 'none') : (expanded ? 'none' : 'rotate(180deg)') }} />
           </button>
         </header>
 
@@ -405,12 +473,16 @@ function EdgeDock() {
                   <>
                     {n.isChecklist ? <CheckSquare size={14} /> : <StickyNote size={14} />}
                     {n.pinned && <div className="peek-indicator-dot" />}
+                    {n.reminderAt > 0 && <div className="peek-indicator-dot" style={{ background: '#FF4757', top: 4 }} />}
                   </>
                 ) : (
                   <>
                     <div className="peek-card-header">
                       <span className="peek-card-tag">{n.isChecklist ? 'Checklist' : 'Note'}</span>
-                      {n.pinned && <Pin size={12} fill="currentColor" />}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        {n.reminderAt > 0 && <Bell size={11} color="var(--brand-violet)" />}
+                        {n.pinned && <Pin size={12} fill="currentColor" />}
+                      </div>
                     </div>
                     <h4 className="peek-card-title">{n.title || 'Untitled note'}</h4>
                     <p className="peek-card-snippet">
@@ -449,16 +521,40 @@ function EdgeDock() {
 // ==============================================================
 // 3. FLOATING CUTE STICKY NOTE CARD
 // ==============================================================
-function FloatingNoteCard() {
+// ==============================================================
+// 3. FLOATING CUTE STICKY NOTE CARD (WITH FULL EDITING SUITE)
+// ==============================================================
+function FloatingNoteCard({ noteId }: { noteId?: string }) {
+  const effectiveId = noteId || targetNoteId;
   const notes = useNotesList();
-  const note = notes.find(n => n.id === targetNoteId);
+  const note = notes.find(n => n.id === effectiveId);
 
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [isChecklist, setIsChecklist] = useState(false);
+  const [isTextMode, setIsTextMode] = useState(false);
   const [pinned, setPinned] = useState(false);
   const [color, setColor] = useState(0);
+  const [reminderAt, setReminderAt] = useState(0);
   const [newItemText, setNewItemText] = useState('');
+
+  // Modals & Popups
+  const [showReminderModal, setShowReminderModal] = useState(false);
+  const [showLinkModal, setShowLinkModal] = useState(false);
+  const [linkTitleInput, setLinkTitleInput] = useState('');
+  const [linkUrlInput, setLinkUrlInput] = useState('https://');
+  const [customReminderInput, setCustomReminderInput] = useState('');
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [saveStatus, setSaveStatus] = useState<'Saved' | 'Saving…'>('Saved');
+
+  // Undo / Redo history
+  const [history, setHistory] = useState<string[]>([]);
+  const [historyIdx, setHistoryIdx] = useState<number>(-1);
+
+  // Voice speech-to-text dictation
+  const [isListening, setIsListening] = useState(false);
+  const recognitionRef = useRef<any>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     if (note) {
@@ -467,12 +563,52 @@ function FloatingNoteCard() {
       setIsChecklist(note.isChecklist);
       setPinned(note.pinned);
       setColor(note.color);
+      setReminderAt(note.reminderAt || 0);
+
+      // Initialize history stack on first note load
+      if (history.length === 0) {
+        setHistory([note.body]);
+        setHistoryIdx(0);
+      }
     }
   }, [note?.id]);
 
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  // Push new state to history (clamp to 50 items)
+  const pushHistory = (newBody: string) => {
+    if (historyIdx >= 0 && history[historyIdx] === newBody) return;
+    const nextHistory = [...history.slice(0, historyIdx + 1), newBody].slice(-50);
+    setHistory(nextHistory);
+    setHistoryIdx(nextHistory.length - 1);
+  };
+
+  const handleUndo = () => {
+    if (historyIdx > 0) {
+      const prevIdx = historyIdx - 1;
+      const prevText = history[prevIdx];
+      setHistoryIdx(prevIdx);
+      setBody(prevText);
+      void updateFields({ body: prevText });
+    }
+  };
+
+  const handleRedo = () => {
+    if (historyIdx < history.length - 1) {
+      const nextIdx = historyIdx + 1;
+      const nextText = history[nextIdx];
+      setHistoryIdx(nextIdx);
+      setBody(nextText);
+      void updateFields({ body: nextText });
+    }
+  };
+
   // Persist placement on move
   useEffect(() => {
-    if (!native || !targetNoteId) return;
+    if (!native || !effectiveId) return;
     let timeout: ReturnType<typeof setTimeout> | null = null;
     let unlisten: undefined | (() => void);
     let active = true;
@@ -480,7 +616,7 @@ function FloatingNoteCard() {
     getCurrentWindow()
       .onMoved(() => {
         if (timeout) clearTimeout(timeout);
-        timeout = setTimeout(() => void persistPlacement(placementKey(targetNoteId), 310, 330), 400);
+        timeout = setTimeout(() => void persistPlacement(placementKey(effectiveId), 340, 430), 400);
       })
       .then(fn => {
         if (active) unlisten = fn;
@@ -493,7 +629,17 @@ function FloatingNoteCard() {
       if (timeout) clearTimeout(timeout);
       unlisten?.();
     };
-  }, []);
+  }, [effectiveId]);
+
+  // Card-level reminder alarm watcher
+  useEffect(() => {
+    if (reminderAt > 0 && reminderAt <= Date.now()) {
+      playReminderChime();
+      showToast(`⏰ Reminder: ${title || 'Note reminder'}`);
+      setReminderAt(0);
+      void updateFields({ reminderAt: 0 });
+    }
+  }, [reminderAt]);
 
   if (!note) {
     return <div style={{ padding: 20, fontSize: 13, color: '#888' }}>Loading sticky note...</div>;
@@ -502,12 +648,14 @@ function FloatingNoteCard() {
   const colorMeta = NOTE_COLORS[color] || NOTE_COLORS[0];
 
   const updateFields = async (updates: Partial<Note>) => {
+    setSaveStatus('Saving…');
     const updated: Note = {
       ...note,
       ...updates,
       updatedAt: Date.now(),
     };
     await saveNote(updated);
+    setTimeout(() => setSaveStatus('Saved'), 300);
   };
 
   const handleTitleBlur = () => {
@@ -515,7 +663,10 @@ function FloatingNoteCard() {
   };
 
   const handleBodyBlur = () => {
-    if (body !== note.body) void updateFields({ body });
+    if (body !== note.body) {
+      pushHistory(body);
+      void updateFields({ body });
+    }
   };
 
   const togglePin = async () => {
@@ -529,6 +680,7 @@ function FloatingNoteCard() {
       }
     }
     await updateFields({ pinned: next });
+    showToast(next ? 'Note pinned to top' : 'Note unpinned');
   };
 
   const handleMinimize = async () => {
@@ -540,18 +692,118 @@ function FloatingNoteCard() {
     }
   };
 
-  const handleClose = async () => {
-    if (native) {
-      await persistPlacement(placementKey(note.id));
-      await getCurrentWindow().close();
-    } else {
-      window.dispatchEvent(new CustomEvent('sidenote_preview_close_float', { detail: note.id }));
+  const handleArchive = async () => {
+    await updateFields({ archived: true });
+    await handleMinimize();
+  };
+
+  // Text formatting insertion helper
+  const insertFormatting = (prefix: string, suffix: string = '') => {
+    const el = textareaRef.current;
+    if (!el) {
+      const next = body + prefix + suffix;
+      setBody(next);
+      pushHistory(next);
+      void updateFields({ body: next });
+      return;
+    }
+    const start = el.selectionStart ?? 0;
+    const end = el.selectionEnd ?? 0;
+    const val = el.value;
+    const selected = val.substring(start, end);
+    const fallback = prefix === '• ' || prefix === '[ ] ' || prefix === '### ' ? '' : 'text';
+    const replacement = `${prefix}${selected || fallback}${suffix}`;
+    const nextVal = val.substring(0, start) + replacement + val.substring(end);
+    setBody(nextVal);
+    pushHistory(nextVal);
+    void updateFields({ body: nextVal });
+    setTimeout(() => {
+      el.focus();
+      const newPos = start + replacement.length;
+      el.setSelectionRange(newPos, newPos);
+    }, 10);
+  };
+
+  // Keyboard shortcuts (Ctrl+B, Ctrl+I, Ctrl+U, Ctrl+Z, Ctrl+Y, Tab)
+  const handleTextareaKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.ctrlKey || e.metaKey) {
+      if (e.key === 'b' || e.key === 'B') {
+        e.preventDefault();
+        insertFormatting('**', '**');
+      } else if (e.key === 'i' || e.key === 'I') {
+        e.preventDefault();
+        insertFormatting('*', '*');
+      } else if (e.key === 'u' || e.key === 'U') {
+        e.preventDefault();
+        insertFormatting('<u>', '</u>');
+      } else if (e.key === 'z' || e.key === 'Z') {
+        e.preventDefault();
+        handleUndo();
+      } else if (e.key === 'y' || e.key === 'Y') {
+        e.preventDefault();
+        handleRedo();
+      }
+    } else if (e.key === 'Tab') {
+      e.preventDefault();
+      insertFormatting('  ');
     }
   };
 
-  const handleArchive = async () => {
-    await updateFields({ archived: true });
-    await handleClose();
+  // Copy note body to clipboard
+  const handleCopyNote = async () => {
+    try {
+      await navigator.clipboard.writeText(body);
+      showToast('Note copied to clipboard!');
+    } catch {
+      showToast('Copy failed');
+    }
+  };
+
+  // Voice Speech-to-Text dictation toggle
+  const toggleDictation = () => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      showToast('Speech recognition not supported in this browser.');
+      return;
+    }
+    if (isListening && recognitionRef.current) {
+      recognitionRef.current.stop();
+      setIsListening(false);
+      showToast('Voice dictation stopped');
+      return;
+    }
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'en-US';
+      recognition.onresult = (event: any) => {
+        let final = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            final += event.results[i][0].transcript;
+          }
+        }
+        if (final) {
+          setBody(prev => {
+            const sep = prev.length > 0 && !prev.endsWith(' ') && !prev.endsWith('\n') ? ' ' : '';
+            const next = prev + sep + final.trim();
+            pushHistory(next);
+            void updateFields({ body: next });
+            return next;
+          });
+        }
+      };
+      recognition.onerror = () => setIsListening(false);
+      recognition.onend = () => setIsListening(false);
+      recognition.start();
+      recognitionRef.current = recognition;
+      setIsListening(true);
+      showToast('Listening... Speak now 🎙️');
+    } catch (err) {
+      console.warn('Speech error:', err);
+      setIsListening(false);
+    }
   };
 
   // Checklist parser & serializer
@@ -571,7 +823,20 @@ function FloatingNoteCard() {
     items[index].isDone = !items[index].isDone;
     const newBody = items.map(item => `[${item.isDone ? 'x' : ' '}] ${item.text}`).join('\n');
     setBody(newBody);
+    pushHistory(newBody);
     await updateFields({ body: newBody });
+  };
+
+  const handleEditChecklistItem = (index: number, newText: string) => {
+    const items = [...checklistItems];
+    items[index].text = newText;
+    const newBody = items.map(item => `[${item.isDone ? 'x' : ' '}] ${item.text}`).join('\n');
+    setBody(newBody);
+  };
+
+  const handleFinishEditChecklistItem = async () => {
+    pushHistory(body);
+    await updateFields({ body });
   };
 
   const addChecklistItem = async () => {
@@ -579,6 +844,7 @@ function FloatingNoteCard() {
     const newBody = body ? `${body}\n[ ] ${newItemText.trim()}` : `[ ] ${newItemText.trim()}`;
     setBody(newBody);
     setNewItemText('');
+    pushHistory(newBody);
     await updateFields({ body: newBody });
   };
 
@@ -586,13 +852,67 @@ function FloatingNoteCard() {
     const items = checklistItems.filter((_, i) => i !== index);
     const newBody = items.map(item => `[${item.isDone ? 'x' : ' '}] ${item.text}`).join('\n');
     setBody(newBody);
+    pushHistory(newBody);
     await updateFields({ body: newBody });
+  };
+
+  // Reminder preset setter
+  const setReminderOffset = async (ms: number, label: string) => {
+    const target = Date.now() + ms;
+    setReminderAt(target);
+    setShowReminderModal(false);
+    await updateFields({ reminderAt: target });
+    showToast(`Reminder set for ${label}`);
+  };
+
+  const setTomorrowMorningReminder = async () => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    d.setHours(9, 0, 0, 0);
+    const target = d.getTime();
+    setReminderAt(target);
+    setShowReminderModal(false);
+    await updateFields({ reminderAt: target });
+    showToast('Reminder set for Tomorrow 9:00 AM');
+  };
+
+  const handleCustomReminderSubmit = async () => {
+    if (!customReminderInput) return;
+    const target = new Date(customReminderInput).getTime();
+    if (isNaN(target) || target <= Date.now()) {
+      showToast('Please pick a future date and time');
+      return;
+    }
+    setReminderAt(target);
+    setShowReminderModal(false);
+    await updateFields({ reminderAt: target });
+    showToast('Custom reminder scheduled!');
+  };
+
+  const handleClearReminder = async () => {
+    setReminderAt(0);
+    setShowReminderModal(false);
+    await updateFields({ reminderAt: 0 });
+    showToast('Reminder cleared');
+  };
+
+  // Link dialog submit
+  const handleInsertLink = () => {
+    const url = linkUrlInput.trim();
+    const titleText = linkTitleInput.trim();
+    if (url && url !== 'https://') {
+      const formatted = titleText ? `[${titleText}](${url})` : url;
+      insertFormatting(formatted);
+      setShowLinkModal(false);
+      setLinkTitleInput('');
+      setLinkUrlInput('https://');
+    }
   };
 
   const handleDragMouseDown = (e: React.MouseEvent) => {
     if (e.button === 0) {
       const target = e.target as HTMLElement;
-      if (!target.closest('button, input, textarea, .color-swatch-dot, [data-no-drag]')) {
+      if (!target.closest('button, input, textarea, .color-swatch-dot, .preset-btn, [data-no-drag]')) {
         if (native) {
           getCurrentWindow().startDragging().catch(console.warn);
         }
@@ -600,8 +920,22 @@ function FloatingNoteCard() {
     }
   };
 
+  // Live Statistics Calculation
+  const totalTasks = checklistItems.length;
+  const completedTasks = checklistItems.filter(i => i.isDone).length;
+  const taskPct = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+  const wordCount = body.trim() ? body.trim().split(/\s+/).length : 0;
+  const charCount = body.length;
+
   return (
     <div className="floating-card-wrapper" onMouseDown={handleDragMouseDown}>
+      {toastMessage && (
+        <div className="desktop-toast-banner" onClick={() => setToastMessage(null)}>
+          <Sparkles size={14} color="#FFF" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
       <div
         className="floating-sticky-note"
         style={{
@@ -614,21 +948,19 @@ function FloatingNoteCard() {
         <div className="sticky-top-tape" data-tauri-drag-region onMouseDown={handleDragMouseDown}>
           <div className="sticky-badge-group" data-tauri-drag-region onMouseDown={handleDragMouseDown}>
             <img src={appLogo} alt="" style={{ width: 15, height: 15, objectFit: 'contain', pointerEvents: 'none' }} />
-            <span className="sticky-badge" style={{ pointerEvents: 'none' }}>{isChecklist ? 'Checklist' : 'Sticky Note'}</span>
+            <span className="sticky-badge" style={{ pointerEvents: 'none' }}>
+              {isChecklist ? 'Checklist' : 'Sticky Note'}
+            </span>
           </div>
 
           <div className="sticky-actions" data-no-drag onMouseDown={e => e.stopPropagation()}>
-            {/* Checklist Toggle */}
+            {/* Reminder Bell */}
             <button
-              className={`sticky-icon-btn ${isChecklist ? 'is-active' : ''}`}
-              title="Toggle checklist"
-              onClick={async () => {
-                const next = !isChecklist;
-                setIsChecklist(next);
-                await updateFields({ isChecklist: next });
-              }}
+              className={`sticky-icon-btn ${reminderAt > Date.now() ? 'is-active' : ''}`}
+              title={reminderAt > Date.now() ? 'Reminder active (Click to manage)' : 'Set note reminder'}
+              onClick={() => setShowReminderModal(true)}
             >
-              <CheckSquare size={14} />
+              <Bell size={13} fill={reminderAt > Date.now() ? 'currentColor' : 'none'} />
             </button>
 
             {/* Pin Toggle */}
@@ -637,19 +969,157 @@ function FloatingNoteCard() {
               title={pinned ? 'Unpin from top' : 'Pin on top'}
               onClick={togglePin}
             >
-              <Pin size={14} fill={pinned ? 'currentColor' : 'none'} />
+              <Pin size={13} fill={pinned ? 'currentColor' : 'none'} />
             </button>
 
             {/* Minimize to Edge Dock */}
             <button className="sticky-icon-btn" title="Fold to edge dock" onClick={handleMinimize}>
-              <Minus size={15} />
+              <Minus size={14} />
             </button>
 
             {/* Close / Archive */}
             <button className="sticky-icon-btn" title="Archive note" onClick={handleArchive}>
-              <X size={15} />
+              <X size={14} />
             </button>
           </div>
+        </div>
+
+        {/* Live Note Statistics Strip */}
+        <div className="sticky-stats-strip">
+          <div className="sticky-stats-left">
+            {isChecklist ? (
+              <span>{completedTasks} / {totalTasks} tasks completed ({taskPct}%)</span>
+            ) : (
+              <span>{wordCount} words · {charCount} characters</span>
+            )}
+            {reminderAt > Date.now() && (
+              <span className="reminder-chip-badge" title="Active reminder">
+                <Clock size={10} />
+                {new Date(reminderAt).toLocaleDateString([], { month: 'short', day: 'numeric' })},{' '}
+                {new Date(reminderAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            )}
+          </div>
+          <span className="sticky-stats-status">{saveStatus}</span>
+        </div>
+
+        {/* Checklist Toggle & View Mode Row */}
+        <div className="sticky-control-row">
+          <label className="control-toggle-label">
+            <input
+              type="checkbox"
+              checked={isChecklist}
+              onChange={async e => {
+                const next = e.target.checked;
+                setIsChecklist(next);
+                if (next) {
+                  // Format raw lines into checklist items if not already formatted
+                  const lines = body.split('\n').map(l => (l.trim() && !l.startsWith('[ ] ') && !l.startsWith('[x] ') ? `[ ] ${l}` : l));
+                  const newB = lines.join('\n');
+                  setBody(newB);
+                  pushHistory(newB);
+                  await updateFields({ isChecklist: next, body: newB });
+                } else {
+                  await updateFields({ isChecklist: next });
+                }
+              }}
+            />
+            <span>To-do checklist</span>
+          </label>
+
+          {isChecklist && (
+            <button
+              className="control-mode-pill"
+              title="Toggle interactive list items vs raw markdown edit"
+              onClick={() => setIsTextMode(!isTextMode)}
+            >
+              {isTextMode ? 'Interactive View' : 'Raw Text Mode'}
+            </button>
+          )}
+        </div>
+
+        {/* Rich Formatting Toolbar */}
+        <div className="sticky-toolbar-row" data-no-drag onMouseDown={e => e.stopPropagation()}>
+          <button
+            className="tool-btn"
+            title="Undo (Ctrl+Z)"
+            disabled={historyIdx <= 0}
+            onClick={handleUndo}
+          >
+            <RotateCcw size={13} />
+          </button>
+          <button
+            className="tool-btn"
+            title="Redo (Ctrl+Y)"
+            disabled={historyIdx >= history.length - 1}
+            onClick={handleRedo}
+          >
+            <RotateCw size={13} />
+          </button>
+
+          <div className="tool-divider" />
+
+          <button className="tool-btn" title="Bold (Ctrl+B)" onClick={() => insertFormatting('**', '**')}>
+            <Bold size={13} />
+          </button>
+          <button className="tool-btn" title="Italic (Ctrl+I)" onClick={() => insertFormatting('*', '*')}>
+            <Italic size={13} />
+          </button>
+          <button className="tool-btn" title="Underline (Ctrl+U)" onClick={() => insertFormatting('<u>', '</u>')}>
+            <Underline size={13} />
+          </button>
+          <button className="tool-btn" title="Heading" onClick={() => insertFormatting('### ')}>
+            <Heading size={13} />
+          </button>
+          <button className="tool-btn" title="Bullet List" onClick={() => insertFormatting('• ')}>
+            <List size={13} />
+          </button>
+          <button className="tool-btn" title="To-do Task" onClick={() => insertFormatting('[ ] ')}>
+            <CheckSquare size={13} />
+          </button>
+          <button
+            className="tool-btn"
+            title="Timestamp"
+            onClick={() => {
+              const stamp = new Date().toLocaleDateString([], { month: 'short', day: 'numeric' }) + ', ' +
+                new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+              insertFormatting(stamp);
+            }}
+          >
+            <Clock size={13} />
+          </button>
+
+          <div className="tool-divider" />
+
+          <button
+            className="tool-btn"
+            title="Insert Web Link"
+            onClick={async () => {
+              const el = textareaRef.current;
+              const sel = el && el.selectionStart !== el.selectionEnd ? el.value.substring(el.selectionStart, el.selectionEnd) : '';
+              if (sel) setLinkTitleInput(sel);
+              try {
+                const clip = await navigator.clipboard.readText();
+                if (clip.startsWith('http://') || clip.startsWith('https://')) {
+                  setLinkUrlInput(clip.trim());
+                }
+              } catch {}
+              setShowLinkModal(true);
+            }}
+          >
+            <LinkIcon size={13} />
+          </button>
+          <button className="tool-btn" title="Copy note text" onClick={handleCopyNote}>
+            <Copy size={13} />
+          </button>
+          <button
+            className={`tool-btn ${isListening ? 'is-recording' : ''}`}
+            title={isListening ? 'Stop recording voice' : 'Dictate note by voice'}
+            onClick={toggleDictation}
+          >
+            <Mic size={13} />
+            {isListening && <span>Rec</span>}
+          </button>
         </div>
 
         {/* Content Area */}
@@ -663,13 +1133,15 @@ function FloatingNoteCard() {
             maxLength={2000}
           />
 
-          {!isChecklist ? (
+          {!isChecklist || isTextMode ? (
             <textarea
+              ref={textareaRef}
               className="sticky-textarea"
-              placeholder="Jot down a quick thought..."
+              placeholder={isChecklist ? '[ ] First task…\n[ ] Second task…' : 'Jot down a quick thought…'}
               value={body}
               onChange={e => setBody(e.target.value)}
               onBlur={handleBodyBlur}
+              onKeyDown={handleTextareaKeyDown}
             />
           ) : (
             <div className="checklist-container">
@@ -678,14 +1150,19 @@ function FloatingNoteCard() {
                   <div
                     className={`checklist-checkbox ${item.isDone ? 'is-checked' : ''}`}
                     onClick={() => void toggleChecklistItem(idx)}
+                    title={item.isDone ? 'Mark incomplete' : 'Mark complete'}
                   >
                     {item.isDone && <Check size={12} strokeWidth={3} />}
                   </div>
-                  <span className={`checklist-item-text ${item.isDone ? 'is-done' : ''}`}>
-                    {item.text}
-                  </span>
+                  <input
+                    className={`checklist-item-text ${item.isDone ? 'is-done' : ''}`}
+                    value={item.text}
+                    onChange={e => handleEditChecklistItem(idx, e.target.value)}
+                    onBlur={handleFinishEditChecklistItem}
+                  />
                   <button
-                    style={{ border: 'none', background: 'transparent', cursor: 'pointer', opacity: 0.3 }}
+                    className="checklist-delete-btn"
+                    title="Delete item"
                     onClick={() => void deleteChecklistItem(idx)}
                   >
                     <X size={12} />
@@ -694,16 +1171,18 @@ function FloatingNoteCard() {
               ))}
 
               <div className="checklist-add-row">
-                <Plus size={14} />
                 <input
                   className="checklist-add-input"
-                  placeholder="New item (press Enter)..."
+                  placeholder="＋ Add a task… (Enter to add)"
                   value={newItemText}
                   onChange={e => setNewItemText(e.target.value)}
                   onKeyDown={e => {
                     if (e.key === 'Enter') void addChecklistItem();
                   }}
                 />
+                <button className="checklist-add-btn" onClick={addChecklistItem}>
+                  Add
+                </button>
               </div>
             </div>
           )}
@@ -730,6 +1209,98 @@ function FloatingNoteCard() {
             {new Date(note.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
           </span>
         </div>
+
+        {/* 1. Reminder Preset Modal Overlay */}
+        {showReminderModal && (
+          <div className="note-popup-overlay" onClick={() => setShowReminderModal(false)}>
+            <div className="note-popup-card" onClick={e => e.stopPropagation()}>
+              <h3 className="popup-title">
+                <Bell size={16} color="var(--brand-violet)" /> Note Reminder
+              </h3>
+              <div className="popup-preset-list">
+                <button className="preset-btn" onClick={() => void setReminderOffset(15 * 60 * 1000, 'In 15 minutes')}>
+                  <span>In 15 minutes</span>
+                  <Clock size={12} opacity={0.6} />
+                </button>
+                <button className="preset-btn" onClick={() => void setReminderOffset(60 * 60 * 1000, 'In 1 hour')}>
+                  <span>In 1 hour</span>
+                  <Clock size={12} opacity={0.6} />
+                </button>
+                <button className="preset-btn" onClick={() => void setTomorrowMorningReminder()}>
+                  <span>Tomorrow (9:00 AM)</span>
+                  <Clock size={12} opacity={0.6} />
+                </button>
+              </div>
+
+              <div style={{ marginTop: 4 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-secondary)', display: 'block', marginBottom: 4 }}>
+                  Pick Date & Time
+                </span>
+                <input
+                  type="datetime-local"
+                  className="popup-input"
+                  value={customReminderInput}
+                  onChange={e => setCustomReminderInput(e.target.value)}
+                />
+              </div>
+
+              <div className="popup-actions">
+                {reminderAt > 0 && (
+                  <button className="popup-btn-danger" onClick={handleClearReminder}>
+                    Clear
+                  </button>
+                )}
+                <button className="popup-btn-secondary" onClick={() => setShowReminderModal(false)}>
+                  Cancel
+                </button>
+                <button className="popup-btn-primary" onClick={handleCustomReminderSubmit}>
+                  Set Alarm
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 2. Web Link Insertion Modal Overlay */}
+        {showLinkModal && (
+          <div className="note-popup-overlay" onClick={() => setShowLinkModal(false)}>
+            <div className="note-popup-card" onClick={e => e.stopPropagation()}>
+              <h3 className="popup-title">
+                <LinkIcon size={16} color="var(--brand-violet)" /> Insert Web Link
+              </h3>
+              <div>
+                <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-secondary)', display: 'block', marginBottom: 4 }}>
+                  Link Text (Optional)
+                </span>
+                <input
+                  className="popup-input"
+                  placeholder="e.g. My Website"
+                  value={linkTitleInput}
+                  onChange={e => setLinkTitleInput(e.target.value)}
+                />
+              </div>
+              <div>
+                <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-secondary)', display: 'block', marginBottom: 4 }}>
+                  Destination URL
+                </span>
+                <input
+                  className="popup-input"
+                  placeholder="https://example.com"
+                  value={linkUrlInput}
+                  onChange={e => setLinkUrlInput(e.target.value)}
+                />
+              </div>
+              <div className="popup-actions">
+                <button className="popup-btn-secondary" onClick={() => setShowLinkModal(false)}>
+                  Cancel
+                </button>
+                <button className="popup-btn-primary" onClick={handleInsertLink}>
+                  Insert
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -740,8 +1311,13 @@ function FloatingNoteCard() {
 // ==============================================================
 function LibraryView() {
   const notes = useNotesList();
-  const [tab, setTab] = useState<'all' | 'pinned' | 'checklists' | 'archived' | 'sync'>('all');
+  const [tab, setTab] = useState<'all' | 'pinned' | 'checklists' | 'archived' | 'sync' | 'backup'>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [dockSide, setDockSide] = useState<'right' | 'left'>(() => {
+    return (localStorage.getItem('sidenote_dock_side') as 'right' | 'left') || 'right';
+  });
+  const [backupStatus, setBackupStatus] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Sync state
   const [deviceId, setDeviceId] = useState('');
@@ -791,6 +1367,67 @@ function LibraryView() {
     }
   };
 
+  // Export all notes as a JSON file download
+  const handleExportJSON = () => {
+    try {
+      const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(notes, null, 2));
+      const downloadAnchor = document.createElement('a');
+      const dateStamp = new Date().toISOString().split('T')[0];
+      downloadAnchor.setAttribute('href', dataStr);
+      downloadAnchor.setAttribute('download', `SideNote-Backup-${dateStamp}.json`);
+      document.body.appendChild(downloadAnchor);
+      downloadAnchor.click();
+      downloadAnchor.remove();
+      setBackupStatus(`Successfully exported ${notes.length} notes!`);
+    } catch (e) {
+      setBackupStatus('Export failed: ' + String(e));
+    }
+  };
+
+  // Import notes from a selected JSON backup file
+  const handleImportJSON = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async event => {
+      try {
+        const content = event.target?.result as string;
+        const parsed = JSON.parse(content);
+        if (Array.isArray(parsed)) {
+          let count = 0;
+          for (const item of parsed) {
+            if (item.id && (item.title !== undefined || item.body !== undefined)) {
+              await saveNote({
+                id: item.id || crypto.randomUUID(),
+                title: item.title || '',
+                body: item.body || '',
+                color: typeof item.color === 'number' ? item.color : 0,
+                isChecklist: Boolean(item.isChecklist),
+                updatedAt: item.updatedAt || Date.now(),
+                pinned: Boolean(item.pinned),
+                archived: Boolean(item.archived),
+                reminderAt: item.reminderAt || 0,
+              });
+              count++;
+            }
+          }
+          setBackupStatus(`Successfully restored ${count} notes from backup!`);
+        } else {
+          setBackupStatus('Invalid backup file format.');
+        }
+      } catch (err) {
+        setBackupStatus('Import failed: ' + String(err));
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleToggleDockSide = (side: 'left' | 'right') => {
+    setDockSide(side);
+    localStorage.setItem('sidenote_dock_side', side);
+    window.dispatchEvent(new Event('sidenote_dock_side_changed'));
+  };
+
   return (
     <div className="library-window">
       {/* Header */}
@@ -815,6 +1452,9 @@ function LibraryView() {
           <button className={`library-tab-btn ${tab === 'sync' ? 'is-active' : ''}`} onClick={() => setTab('sync')}>
             <Wifi size={14} /> Sync & Devices
           </button>
+          <button className={`library-tab-btn ${tab === 'backup' ? 'is-active' : ''}`} onClick={() => setTab('backup')}>
+            <Download size={14} /> Backup & Tools
+          </button>
         </nav>
 
         <button
@@ -831,7 +1471,84 @@ function LibraryView() {
 
       {/* Main Body */}
       <div className="library-content-body">
-        {tab !== 'sync' ? (
+        {tab === 'backup' ? (
+          <div className="sync-pane-card">
+            <h2 style={{ margin: '0 0 8px 0', fontSize: 18, fontWeight: 800 }}>Backup, Preferences & Desktop Tools</h2>
+            <p style={{ margin: '0 0 18px 0', fontSize: 13, color: 'var(--ink-secondary)', lineHeight: 1.6 }}>
+              Manage full JSON backups, switch screen edge dock position, and test audio alerts.
+            </p>
+
+            {/* Edge Dock Position Setting */}
+            <div className="backup-section-card">
+              <div className="backup-info">
+                <h4>Screen Edge Dock Alignment</h4>
+                <p>Choose which side of your display the peeking dock rail anchors to.</p>
+              </div>
+              <div className="backup-actions">
+                <button
+                  className={dockSide === 'right' ? 'primary-btn' : 'outline-btn'}
+                  onClick={() => handleToggleDockSide('right')}
+                >
+                  Right Edge
+                </button>
+                <button
+                  className={dockSide === 'left' ? 'primary-btn' : 'outline-btn'}
+                  onClick={() => handleToggleDockSide('left')}
+                >
+                  Left Edge
+                </button>
+              </div>
+            </div>
+
+            {/* JSON Export Card */}
+            <div className="backup-section-card">
+              <div className="backup-info">
+                <h4>Export Notes (JSON)</h4>
+                <p>Download a complete readable JSON archive of all {notes.length} notes.</p>
+              </div>
+              <button className="outline-btn" onClick={handleExportJSON}>
+                <Download size={15} /> Export Backup
+              </button>
+            </div>
+
+            {/* JSON Import Card */}
+            <div className="backup-section-card">
+              <div className="backup-info">
+                <h4>Restore Notes (JSON)</h4>
+                <p>Import notes from a previously exported SideNote JSON file.</p>
+              </div>
+              <div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".json,application/json"
+                  style={{ display: 'none' }}
+                  onChange={handleImportJSON}
+                />
+                <button className="outline-btn" onClick={() => fileInputRef.current?.click()}>
+                  <Upload size={15} /> Select File…
+                </button>
+              </div>
+            </div>
+
+            {/* Chime Test Card */}
+            <div className="backup-section-card">
+              <div className="backup-info">
+                <h4>Audio Reminder Chime</h4>
+                <p>Preview the pleasant high-fidelity notification sound.</p>
+              </div>
+              <button className="outline-btn" onClick={playReminderChime}>
+                <Volume2 size={15} /> Test Chime
+              </button>
+            </div>
+
+            {backupStatus && (
+              <p style={{ marginTop: 14, fontSize: 13, fontWeight: 700, color: 'var(--brand-violet)' }}>
+                {backupStatus}
+              </p>
+            )}
+          </div>
+        ) : tab !== 'sync' ? (
           <>
             <div className="library-search-bar">
               <Search size={18} color="var(--ink-secondary)" />
@@ -857,7 +1574,10 @@ function LibraryView() {
                         <span style={{ fontSize: 9, fontWeight: 800, textTransform: 'uppercase', opacity: 0.65 }}>
                           {n.isChecklist ? 'Checklist' : 'Note'}
                         </span>
-                        {n.pinned && <Pin size={13} fill="currentColor" />}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          {n.reminderAt > 0 && <Bell size={12} color="var(--brand-violet)" />}
+                          {n.pinned && <Pin size={13} fill="currentColor" />}
+                        </div>
                       </div>
                       <h3 style={{ margin: '0 0 6px 0', fontSize: 15, fontWeight: 800 }}>{n.title || 'Untitled Note'}</h3>
                       <p
@@ -1005,13 +1725,13 @@ function BrowserDesktopSimulator() {
       />
 
       {/* Floating Sticky Notes on Desktop */}
-      <div style={{ position: 'absolute', top: 60, left: 80, width: 320, height: 340 }}>
-        {activeFloatingNotes.length > 0 && <FloatingNoteSim note={activeFloatingNotes[0]} />}
+      <div style={{ position: 'absolute', top: 50, left: 70, width: 340, height: 430 }}>
+        {activeFloatingNotes.length > 0 && <FloatingNoteCard noteId={activeFloatingNotes[0].id} />}
       </div>
 
       {activeFloatingNotes.length > 1 && (
-        <div style={{ position: 'absolute', top: 120, left: 440, width: 320, height: 340 }}>
-          <FloatingNoteSim note={activeFloatingNotes[1]} />
+        <div style={{ position: 'absolute', top: 110, left: 450, width: 340, height: 430 }}>
+          <FloatingNoteCard noteId={activeFloatingNotes[1].id} />
         </div>
       )}
 
@@ -1034,59 +1754,13 @@ function BrowserDesktopSimulator() {
           onClick={() => setShowLibraryModal(false)}
         >
           <div
-            style={{ width: 840, height: 580, borderRadius: 20, overflow: 'hidden' }}
+            style={{ width: 880, height: 620, borderRadius: 20, overflow: 'hidden' }}
             onClick={e => e.stopPropagation()}
           >
             <LibraryView />
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-function FloatingNoteSim({ note }: { note: Note }) {
-  const colorMeta = NOTE_COLORS[note.color] || NOTE_COLORS[0];
-  return (
-    <div
-      className="floating-sticky-note"
-      style={{
-        background: colorMeta.bg,
-        color: colorMeta.ink,
-        borderColor: colorMeta.border,
-        height: '100%',
-      }}
-    >
-      <div className="sticky-top-tape">
-        <div className="sticky-badge-group">
-          <img src={appLogo} alt="" style={{ width: 14, height: 14, objectFit: 'contain' }} />
-          <span className="sticky-badge">{note.isChecklist ? 'Checklist' : 'Sticky Note'}</span>
-        </div>
-        <div className="sticky-actions">
-          <button className="sticky-icon-btn" title="Pin">
-            <Pin size={13} fill={note.pinned ? 'currentColor' : 'none'} />
-          </button>
-          <button
-            className="sticky-icon-btn"
-            title="Fold"
-            onClick={() => window.dispatchEvent(new CustomEvent('sidenote_preview_close_float', { detail: note.id }))}
-          >
-            <Minus size={14} />
-          </button>
-        </div>
-      </div>
-      <div className="sticky-body-area">
-        <h3 style={{ margin: '0 0 8px 0', fontSize: 16, fontWeight: 800 }}>{note.title}</h3>
-        <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{note.body}</p>
-      </div>
-      <div className="sticky-footer-bar">
-        <div className="color-swatches-row">
-          {NOTE_COLORS.map((c, i) => (
-            <div key={i} className="color-swatch-dot" style={{ background: c.bg }} />
-          ))}
-        </div>
-        <span className="sticky-footer-meta">Desktop Note</span>
-      </div>
     </div>
   );
 }
