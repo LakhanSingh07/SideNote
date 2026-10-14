@@ -405,6 +405,7 @@ function EdgeDock() {
       }
     };
     handleFit();
+    void adjustDockWidth(false);
     window.addEventListener('resize', handleFit);
     return () => window.removeEventListener('resize', handleFit);
   }, []);

@@ -14,8 +14,8 @@
       {
         "label": "main",
         "title": "SideNote",
-        "width": 64,
-        "height": 520,
+        "width": 140,
+        "height": 850,
         "center": false,
         "decorations": false,
         "transparent": true,
