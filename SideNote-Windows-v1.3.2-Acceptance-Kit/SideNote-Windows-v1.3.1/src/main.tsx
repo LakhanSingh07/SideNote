@@ -8,7 +8,7 @@ import {
   StickyNote, ChevronRight, Check, CheckSquare, Square,
   Moon, Sun, RefreshCw, Copy, Wifi, ShieldCheck, Folder, Sparkles, Move,
   Bold, Italic, Underline, Heading, List, Clock, Link as LinkIcon,
-  Mic, RotateCcw, RotateCw, Bell, BellOff, Download, Upload, Volume2
+  Mic, RotateCcw, RotateCw, Bell, BellOff, Download, Upload, Volume2, Type
 } from 'lucide-react';
 import './style.css';
 import appLogo from './assets/logo.png';
@@ -33,6 +33,15 @@ export function playReminderChime() {
     console.warn('Audio chime warning:', e);
   }
 }
+
+// 5 Curated Font Options (Android Roboto, Cute Cursive, Rounded Sans, Literary Serif, Typewriter)
+export const NOTE_FONTS = [
+  { id: 'roboto', name: 'Roboto', category: 'Android Default (Clean)', class: 'font-roboto', sample: 'Aa Bb 123 • Clean' },
+  { id: 'caveat', name: 'Caveat', category: 'Cute Handwritten / Cursive', class: 'font-caveat', sample: 'Sticky Note Handwriting ✨' },
+  { id: 'nunito', name: 'Nunito', category: 'Cute Rounded Sans', class: 'font-nunito', sample: 'Soft & Friendly 🌸' },
+  { id: 'lora', name: 'Lora', category: 'Literary Serif', class: 'font-lora', sample: 'Editorial Journaling 🖋️' },
+  { id: 'mono', name: 'JetBrains Mono', category: 'Typewriter / Code', class: 'font-mono', sample: 'const note = true;' },
+];
 
 // Note Data Model compatible with Android and Windows SQLite
 export type Note = {
@@ -541,6 +550,10 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
   // Modals & Popups
   const [showReminderModal, setShowReminderModal] = useState(false);
   const [showLinkModal, setShowLinkModal] = useState(false);
+  const [showFontModal, setShowFontModal] = useState(false);
+  const [selectedFont, setSelectedFont] = useState<string>(() => {
+    return localStorage.getItem('sidenote_font_' + (effectiveId || '')) || localStorage.getItem('sidenote_default_font') || 'roboto';
+  });
   const [linkTitleInput, setLinkTitleInput] = useState('');
   const [linkUrlInput, setLinkUrlInput] = useState('https://');
   const [customReminderInput, setCustomReminderInput] = useState('');
@@ -555,6 +568,19 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = useRef<any>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const currentFontObj = NOTE_FONTS.find(f => f.id === selectedFont) || NOTE_FONTS[0];
+  const fontClass = currentFontObj.class;
+
+  const handleSelectFont = (fontId: string) => {
+    setSelectedFont(fontId);
+    if (effectiveId) {
+      localStorage.setItem('sidenote_font_' + effectiveId, fontId);
+    }
+    setShowFontModal(false);
+    const found = NOTE_FONTS.find(f => f.id === fontId);
+    showToast(`Font set to ${found?.name || fontId}`);
+  };
 
   useEffect(() => {
     if (note) {
@@ -1120,12 +1146,23 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
             <Mic size={13} />
             {isListening && <span>Rec</span>}
           </button>
+
+          <div className="tool-divider" />
+
+          <button
+            className="tool-btn font-selector-btn"
+            title="Choose Font Style (Roboto, Cute Cursive, Rounded Sans, Serif, Mono)"
+            onClick={() => setShowFontModal(true)}
+          >
+            <Type size={13} />
+            <span style={{ fontSize: 10.5 }}>{currentFontObj.name}</span>
+          </button>
         </div>
 
         {/* Content Area */}
         <div className="sticky-body-area">
           <input
-            className="sticky-title-input"
+            className={`sticky-title-input ${fontClass}`}
             placeholder="Title..."
             value={title}
             onChange={e => setTitle(e.target.value)}
@@ -1136,7 +1173,7 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
           {!isChecklist || isTextMode ? (
             <textarea
               ref={textareaRef}
-              className="sticky-textarea"
+              className={`sticky-textarea ${fontClass}`}
               placeholder={isChecklist ? '[ ] First task…\n[ ] Second task…' : 'Jot down a quick thought…'}
               value={body}
               onChange={e => setBody(e.target.value)}
@@ -1155,7 +1192,7 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
                     {item.isDone && <Check size={12} strokeWidth={3} />}
                   </div>
                   <input
-                    className={`checklist-item-text ${item.isDone ? 'is-done' : ''}`}
+                    className={`checklist-item-text ${item.isDone ? 'is-done' : ''} ${fontClass}`}
                     value={item.text}
                     onChange={e => handleEditChecklistItem(idx, e.target.value)}
                     onBlur={handleFinishEditChecklistItem}
@@ -1172,7 +1209,7 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
 
               <div className="checklist-add-row">
                 <input
-                  className="checklist-add-input"
+                  className={`checklist-add-input ${fontClass}`}
                   placeholder="＋ Add a task… (Enter to add)"
                   value={newItemText}
                   onChange={e => setNewItemText(e.target.value)}
@@ -1301,6 +1338,40 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
             </div>
           </div>
         )}
+
+        {/* Font Style Selection Popup */}
+        {showFontModal && (
+          <div className="note-popup-overlay" onClick={() => setShowFontModal(false)}>
+            <div className="note-popup-card" onClick={e => e.stopPropagation()} style={{ maxWidth: 310 }}>
+              <h3 className="popup-title">
+                <Type size={16} color="var(--brand-violet)" /> Choose Note Font
+              </h3>
+              <p style={{ margin: '0 0 10px 0', fontSize: 11, color: 'var(--ink-secondary)', lineHeight: 1.4 }}>
+                Pick a font style for this sticky note (cute cursive, serif, clean sans, etc.):
+              </p>
+              <div className="font-preset-list">
+                {NOTE_FONTS.map(f => (
+                  <div
+                    key={f.id}
+                    className={`font-preset-item ${selectedFont === f.id ? 'is-selected' : ''}`}
+                    onClick={() => handleSelectFont(f.id)}
+                  >
+                    <div className="font-item-info">
+                      <span className={`font-item-name ${f.class}`}>{f.name}</span>
+                      <span className="font-item-category">{f.category}</span>
+                    </div>
+                    <span className={`font-preview-sample ${f.class}`}>{f.sample}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="popup-actions" style={{ marginTop: 12 }}>
+                <button className="popup-btn-secondary" onClick={() => setShowFontModal(false)}>
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1315,6 +1386,9 @@ function LibraryView() {
   const [searchQuery, setSearchQuery] = useState('');
   const [dockSide, setDockSide] = useState<'right' | 'left'>(() => {
     return (localStorage.getItem('sidenote_dock_side') as 'right' | 'left') || 'right';
+  });
+  const [defaultFont, setDefaultFont] = useState<string>(() => {
+    return localStorage.getItem('sidenote_default_font') || 'roboto';
   });
   const [backupStatus, setBackupStatus] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1497,6 +1571,31 @@ function LibraryView() {
                 >
                   Left Edge
                 </button>
+              </div>
+            </div>
+
+            {/* Default Note Typography Card */}
+            <div className="backup-section-card">
+              <div className="backup-info">
+                <h4>Default Note Typography</h4>
+                <p>Choose the default font family for new sticky notes and floating cards.</p>
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {NOTE_FONTS.map(f => (
+                  <button
+                    key={f.id}
+                    className={defaultFont === f.id ? 'primary-btn' : 'outline-btn'}
+                    style={{ fontSize: 12, padding: '4px 10px' }}
+                    onClick={() => {
+                      setDefaultFont(f.id);
+                      localStorage.setItem('sidenote_default_font', f.id);
+                      setBackupStatus(`Default typography set to ${f.name}`);
+                      setTimeout(() => setBackupStatus(''), 3000);
+                    }}
+                  >
+                    <span className={f.class}>{f.name}</span>
+                  </button>
+                ))}
               </div>
             </div>
 

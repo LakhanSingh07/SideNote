@@ -112,7 +112,25 @@ test lan_sync::tests::duplicate_packet_rejected ... ok
 ## 5. Deliverables Status
 - `SideNote-Android-Final-Source.zip` (2.08 MB) — Verified
 - `SideNote-Android.apk` (3.34 MB) — Verified
-- `SideNote-Windows-Final-Source.zip` (136 KB) — Verified
+- `SideNote-Windows-Final-Source.zip` (395 KB) — Verified
+- `SideNote-Windows-Setup.exe` (2.94 MB) — Verified
+- `SideNote-Windows-Setup.msi` (4.52 MB) — Verified
 - `SideNote-Cross-Platform-Protocol.md` — Verified
 - `SideNote-Acceptance-Report.md` — Verified
 - `SideNote-Remaining-Issues.md` — Verified
+
+---
+
+## 6. Multi-Font & Android Typography Suite (v1.3.3)
+
+| Font Option | Category | Purpose / Look & Feel | Verified File |
+|---|---|---|---|
+| **Roboto** | Android Default Sans | Exact Android native font (`sans-serif` / `sans-serif-medium`) | `SCREENSHOTS/7_font_picker_modal.png` |
+| **Caveat** | Cute Handwritten Cursive | Organic, warm sticky-note handwritten style | `SCREENSHOTS/8_cursive_handwriting_note.png` |
+| **Nunito** | Playful Rounded Sans | Soft, welcoming pastel aesthetic | `SCREENSHOTS/7_font_picker_modal.png` |
+| **Lora** | Literary Editorial Serif | Elegant book reflections, poetry, and quotes | `SCREENSHOTS/9_serif_editorial_note.png` |
+| **JetBrains Mono** | Code & Typewriter | Monospaced typewriter vibe for tasks & snippets | `SCREENSHOTS/7_font_picker_modal.png` |
+
+- **Instant Switching**: Change fonts per-note directly from the toolbar's font picker modal.
+- **Global Default**: Set default note typography in `LibraryView` -> `Backup & Tools`.
+

@@ -1,7 +1,7 @@
-/* SideNote Windows Desktop Design System — Aligned with SideNote Android */
+/* SideNote Windows Desktop Design System — Aligned with SideNote Android (Roboto Default) */
 :root {
-  --font-main: 'Segoe UI Variable Text', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
-  --font-display: 'Segoe UI Variable Display', 'Segoe UI', -apple-system, 'Inter', sans-serif;
+  --font-main: 'Roboto', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-display: 'Roboto', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   
   /* Brand colors matching Android Ui.kt */
   --brand-violet: #8A4BFF;
@@ -951,6 +951,111 @@ input, textarea, button {
   font-weight: 600;
   cursor: pointer;
   margin-right: auto;
+}
+
+/* Note Font Family Classes */
+.font-roboto {
+  font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+}
+
+.font-caveat {
+  font-family: 'Caveat', 'Segoe Print', cursive !important;
+  font-size: 1.15em;
+  line-height: 1.5;
+}
+
+.font-caveat.sticky-title-input {
+  font-size: 20px !important;
+  font-weight: 700;
+}
+
+.font-caveat.sticky-textarea {
+  font-size: 16px !important;
+}
+
+.font-caveat .checklist-item-text {
+  font-size: 16px !important;
+}
+
+.font-nunito {
+  font-family: 'Nunito', 'Segoe UI Variable', -apple-system, sans-serif !important;
+  letter-spacing: 0.1px;
+}
+
+.font-lora {
+  font-family: 'Lora', 'Georgia', 'Cambria', serif !important;
+  line-height: 1.65;
+}
+
+.font-lora.sticky-title-input {
+  font-style: italic;
+  font-weight: 600;
+}
+
+.font-mono {
+  font-family: 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace !important;
+  font-size: 0.94em;
+  line-height: 1.55;
+}
+
+/* Font Picker Modal Styles */
+.font-preset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-height: 290px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.font-preset-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--surface-field);
+  border: 1.5px solid var(--surface-border);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  color: var(--ink-primary);
+}
+
+.font-preset-item:hover {
+  background: var(--brand-soft);
+  border-color: var(--brand-violet);
+  transform: translateX(3px);
+}
+
+.font-preset-item.is-selected {
+  background: var(--brand-soft);
+  border-color: var(--brand-violet);
+  box-shadow: 0 2px 8px var(--brand-glow);
+}
+
+.font-item-info {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+}
+
+.font-item-name {
+  font-size: 13.5px;
+  font-weight: 700;
+}
+
+.font-item-category {
+  font-size: 10px;
+  color: var(--ink-secondary);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-top: 1px;
+}
+
+.font-preview-sample {
+  font-size: 13px;
+  opacity: 0.85;
 }
 
 /* Sticky Footer with Swatches */

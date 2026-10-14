@@ -86,6 +86,85 @@ def run():
             lib_elem.screenshot(path=os.path.join(OUTPUT_DIR, "6_library_backup_tools.png"))
         lib_page.close()
 
+        # 7. Font Picker Modal
+        print("Capturing 7_font_picker_modal.png...")
+        font_page = context.new_page()
+        font_page.set_viewport_size({"width": 380, "height": 500})
+        font_page.goto("http://localhost:4173/?view=note&id=sample-1")
+        font_page.wait_for_selector(".font-selector-btn")
+        time.sleep(0.8)
+        font_btn = font_page.query_selector(".font-selector-btn")
+        if font_btn:
+            font_btn.click()
+            time.sleep(0.5)
+            font_page.wait_for_selector(".font-preset-list")
+            fp_elem = font_page.query_selector(".floating-sticky-note")
+            if fp_elem:
+                fp_elem.screenshot(path=os.path.join(OUTPUT_DIR, "7_font_picker_modal.png"))
+        font_page.close()
+
+        # 8. Cute Cursive Sticky Note
+        print("Capturing 8_cursive_handwriting_note.png...")
+        cur_page = context.new_page()
+        cur_page.set_viewport_size({"width": 360, "height": 450})
+        cur_page.goto("http://localhost:4173/?view=note&id=sample-cursive")
+        cur_page.evaluate("""() => {
+            localStorage.setItem('sidenote_font_sample-cursive', 'caveat');
+            const n = {
+                id: 'sample-cursive',
+                title: '✨ Daily Cute Thoughts',
+                body: 'Dear diary,\\n\\nRemember to smile today! Life is beautiful and full of wonderful surprises. 🌸\\n- Call mom in the evening\\n- Buy fresh lavender & tea',
+                color: 1,
+                pinned: true,
+                archived: false,
+                isChecklist: false,
+                checklistData: '[]',
+                reminderAt: 0,
+                updatedAt: Date.now()
+            };
+            const list = JSON.parse(localStorage.getItem('sidenote_demo_notes') || '[]');
+            list.unshift(n);
+            localStorage.setItem('sidenote_demo_notes', JSON.stringify(list));
+        }""")
+        cur_page.reload()
+        cur_page.wait_for_selector(".floating-sticky-note")
+        time.sleep(1)
+        cur_elem = cur_page.query_selector(".floating-sticky-note")
+        if cur_elem:
+            cur_elem.screenshot(path=os.path.join(OUTPUT_DIR, "8_cursive_handwriting_note.png"))
+        cur_page.close()
+
+        # 9. Literary Serif Sticky Note
+        print("Capturing 9_serif_editorial_note.png...")
+        ser_page = context.new_page()
+        ser_page.set_viewport_size({"width": 360, "height": 450})
+        ser_page.goto("http://localhost:4173/?view=note&id=sample-serif")
+        ser_page.evaluate("""() => {
+            localStorage.setItem('sidenote_font_sample-serif', 'lora');
+            const n = {
+                id: 'sample-serif',
+                title: 'Book Reflections & Quotes',
+                body: '“The cure for anything is salt water: sweat, tears or the sea.”\\n\\nChapter IV Notes:\\n1. Deep focus leads to effortless clarity\\n2. Simplicity is the ultimate sophistication.',
+                color: 3,
+                pinned: false,
+                archived: false,
+                isChecklist: false,
+                checklistData: '[]',
+                reminderAt: 0,
+                updatedAt: Date.now()
+            };
+            const list = JSON.parse(localStorage.getItem('sidenote_demo_notes') || '[]');
+            list.unshift(n);
+            localStorage.setItem('sidenote_demo_notes', JSON.stringify(list));
+        }""")
+        ser_page.reload()
+        ser_page.wait_for_selector(".floating-sticky-note")
+        time.sleep(1)
+        ser_elem = ser_page.query_selector(".floating-sticky-note")
+        if ser_elem:
+            ser_elem.screenshot(path=os.path.join(OUTPUT_DIR, "9_serif_editorial_note.png"))
+        ser_page.close()
+
         browser.close()
         print("All high-res screenshots successfully captured in SCREENSHOTS folder!")
 
