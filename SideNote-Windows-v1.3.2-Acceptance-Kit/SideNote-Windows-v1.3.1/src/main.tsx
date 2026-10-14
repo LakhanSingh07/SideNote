@@ -323,30 +323,100 @@ function BrandBadge() {
 }
 
 // ==============================================================
-// 2. PRIMARY EXPERIENCE: EDGE DOCK & PEEKING NOTES
+// 2. PRIMARY EXPERIENCE: FIGMA EDGE DOCK & PEEKING TABS
 // ==============================================================
+
+const FIGMA_COLORS = ['#FF8A8C', '#FEF4AA', '#90E4FF', '#DBACFF'];
+const RED_PATH = 'M530.855 156.628C531.03 146.293 539.476 138 549.813 138H785.895C796.388 138 804.899 146.512 804.803 157.005C804.362 205.106 802.629 247.648 805.936 316.87C806.457 327.781 797.795 337 786.87 337H546.75C535.968 337 527.351 328.027 527.74 317.252C530.714 234.74 529.879 214.236 530.855 156.628Z';
+const YEL_PATH = 'M530.79 371.547C530.991 359.036 541.216 349 553.729 349H781.895C794.597 349 804.898 359.3 804.763 372.001C804.28 417.514 802.785 458.801 805.739 523.663C806.341 536.873 795.857 548 782.633 548H550.908C537.857 548 527.428 537.091 527.89 524.047C530.62 446.874 529.93 425.249 530.79 371.547Z';
+
+function FigmaSvgDefs() {
+  return (
+    <svg width="0" height="0" style={{ position: 'absolute' }} aria-hidden="true">
+      <defs>
+        <filter id="b9" x="-30%" y="-100%" width="160%" height="300%"><feGaussianBlur stdDeviation="9" /></filter>
+        <filter id="b35" x="-30%" y="-100%" width="160%" height="300%"><feGaussianBlur stdDeviation="3.5" /></filter>
+        <filter id="b4" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="4" /></filter>
+        <linearGradient id="g0" x1="609.661" y1="323.222" x2="543.838" y2="346.184" gradientUnits="userSpaceOnUse">
+          <stop /><stop offset="1" stopColor="#202020" stopOpacity=".36" />
+        </linearGradient>
+        <linearGradient id="g1" x1="628.03" y1="142.592" x2="631.857" y2="356.899" gradientUnits="userSpaceOnUse">
+          <stop stopOpacity="0" /><stop offset="1" />
+        </linearGradient>
+        <linearGradient id="rg2" x1="596.474" y1="74.4731" x2="634.134" y2="245.793" gradientUnits="userSpaceOnUse">
+          <stop offset=".247555" stopColor="#FFAFB1" stopOpacity=".63" />
+          <stop offset=".459759" stopColor="#C6686A" stopOpacity=".17" />
+          <stop offset=".629337" stopColor="#FF8A8C" stopOpacity=".22" />
+          <stop offset=".78707" stopColor="#FF8A8C" />
+        </linearGradient>
+        <radialGradient id="rg3" cx="0" cy="0" r="1" gradientTransform="matrix(-250.526 -78.8346 190.901 -320.739 879.631 371.442)" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#FFA8A9" /><stop offset="1" stopColor="#FF8A8C" stopOpacity="0" />
+        </radialGradient>
+        <radialGradient id="rg4" cx="798.6" cy="146.4" r="90" gradientUnits="userSpaceOnUse">
+          <stop offset=".577" stopColor="#DB7C7E" stopOpacity=".34" /><stop offset="1" stopColor="#FF8A8C" stopOpacity="0" />
+        </radialGradient>
+        <radialGradient id="rg5" cx="729" cy="124" r="100" gradientUnits="userSpaceOnUse">
+          <stop offset=".577" stopColor="#DB7C7E" stopOpacity=".34" /><stop offset="1" stopColor="#FF8A8C" stopOpacity="0" />
+        </radialGradient>
+      </defs>
+    </svg>
+  );
+}
+
+function SvgShadow() {
+  return (
+    <g transform="translate(-530,-138)">
+      <path filter="url(#b9)" d="M709.161 306.384H560.677L554.554 349.245L710.692 339.877L709.161 306.384Z" fill="#000" fillOpacity=".29" />
+      <path filter="url(#b35)" d="M712.988 317.865H542.308L539.246 346.184L727.53 336.234L712.988 317.865Z" fill="url(#g0)" fillOpacity=".4" />
+      <path filter="url(#b4)" d="M713.753 170.911L536.185 165.554L533.123 330.876H724.469L713.753 170.911Z" fill="url(#g1)" fillOpacity=".3" />
+    </g>
+  );
+}
+
+function SvgShape({ colorIndex }: { colorIndex: number }) {
+  const c = colorIndex % 4;
+  if (c === 0) {
+    return (
+      <g transform="translate(-530,-138)">
+        <path d={RED_PATH} fill="#FF8A8C" />
+        {['rg2', 'rg3', 'rg4', 'rg5'].map(g => (
+          <path key={g} d={RED_PATH} fill={`url(#${g})`} />
+        ))}
+      </g>
+    );
+  }
+  return <path transform="translate(-530,-349)" d={YEL_PATH} fill={FIGMA_COLORS[c]} />;
+}
+
 function EdgeDock() {
   const notes = useNotesList();
-  const [expanded, setExpanded] = useState(false);
-  const [theme, setTheme] = useState<'light' | 'dark'>('light');
-  const [dockSide, setDockSide] = useState<'right' | 'left'>(() => {
-    return (localStorage.getItem('sidenote_dock_side') as 'right' | 'left') || 'right';
-  });
-  const [alarmBanner, setAlarmBanner] = useState<string | null>(null);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const busyRef = useRef(false);
+  const [openNoteId, setOpenNoteId] = useState<string | null>(null);
+  const [toastInfo, setToastInfo] = useState<{ text: string; undoNote?: Note } | null>(null);
+  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const frameRef = useRef<HTMLDivElement>(null);
 
-  // Background reminder watcher: monitors notes and triggers pleasant chime + notification
+  // Auto-fit frame to window height matching user's prototype
+  useEffect(() => {
+    const handleFit = () => {
+      const s = Math.min(0.85, (window.innerHeight - 24) / 1282);
+      document.documentElement.style.setProperty('--s', String(s));
+      if (frameRef.current) {
+        frameRef.current.style.top = `${((window.innerHeight - 1282 * s) / 2 - 33 * s)}px`;
+      }
+    };
+    handleFit();
+    window.addEventListener('resize', handleFit);
+    return () => window.removeEventListener('resize', handleFit);
+  }, []);
+
+  // Background reminder watcher: monitors notes and triggers pleasant chime
   useEffect(() => {
     const checkReminders = async () => {
       const now = Date.now();
       for (const n of notes) {
         if (n.reminderAt > 0 && n.reminderAt <= now && !n.archived) {
           playReminderChime();
-          const alertTitle = n.title || 'Note reminder';
-          setAlarmBanner(`⏰ Reminder: ${alertTitle}`);
-          setTimeout(() => setAlarmBanner(null), 7000);
-          // Mark reminder as triggered to avoid looping
+          showToast(`⏰ Reminder: ${n.title || 'Note reminder'}`);
           await saveNote({ ...n, reminderAt: 0, updatedAt: Date.now() });
           await openFloatingNote(n);
         }
@@ -356,177 +426,221 @@ function EdgeDock() {
     return () => clearInterval(interval);
   }, [notes]);
 
-  // Listen for dock side changes from LibraryView
-  useEffect(() => {
-    const handleSideChange = () => {
-      const side = (localStorage.getItem('sidenote_dock_side') as 'right' | 'left') || 'right';
-      setDockSide(side);
-      void adjustDockWidth(false, side);
-    };
-    window.addEventListener('sidenote_dock_side_changed', handleSideChange);
-    return () => window.removeEventListener('sidenote_dock_side_changed', handleSideChange);
-  }, []);
-
-  // Filter 4 recent unarchived notes for peeking
-  const peekingNotes = useMemo(() => {
-    return notes
-      .filter(n => !n.archived)
-      .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt)
-      .slice(0, 4);
-  }, [notes]);
-
-  // Position at screen edge (left or right) and handle smooth resize
-  const adjustDockWidth = async (open: boolean, sideOverride?: 'right' | 'left') => {
-    setExpanded(open);
-    if (!native || busyRef.current) return;
-    busyRef.current = true;
+  // Adjust native window dimensions when tab opens/closes
+  const adjustDockWidth = async (isOpen: boolean) => {
+    if (!native) return;
     try {
       const w = getCurrentWindow();
       const mon = await currentMonitor();
       if (!mon) return;
       const scale = mon.scaleFactor || 1;
       const screenWidth = mon.size.width / scale;
-      const screenHeight = mon.size.height / scale;
-      const pos = await w.outerPosition();
-      const curY = pos.y / scale;
-      const targetWidth = open ? 290 : 58;
-      const targetHeight = 490;
-      const currentSide = sideOverride || dockSide;
-      
-      const targetX = currentSide === 'left' 
-        ? (mon.position.x / scale) 
-        : (mon.position.x / scale) + screenWidth - targetWidth;
-      const targetY = Math.max(50, Math.min(curY, screenHeight - targetHeight - 40));
+      const s = Math.min(0.85, (window.innerHeight - 24) / 1282);
+      const targetWidth = isOpen ? Math.round(520 * s) : Math.round(180 * s);
+      const targetHeight = Math.round(1360 * s);
+      const targetX = (mon.position.x / scale) + screenWidth - targetWidth;
+      const targetY = Math.max(20, ((mon.size.height / scale) - targetHeight) / 2);
 
       await w.setSize(new LogicalSize(targetWidth, targetHeight));
       await w.setPosition(new LogicalPosition(targetX, targetY));
     } catch (e) {
       console.warn('Dock move error', e);
-    } finally {
-      busyRef.current = false;
     }
   };
 
-  const handleMouseEnter = () => {
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    if (!expanded) void adjustDockWidth(true);
+  const showToast = (text: string, undoNote?: Note) => {
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    setToastInfo({ text, undoNote });
+    toastTimeoutRef.current = setTimeout(() => {
+      setToastInfo(null);
+    }, undoNote ? 6000 : 2500);
   };
 
-  const handleMouseLeave = () => {
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    timeoutRef.current = setTimeout(() => {
-      void adjustDockWidth(false);
-    }, 350);
-  };
+  // 4 recent notes displayed in the peeking tabs
+  const dockNotes = useMemo(() => {
+    return notes
+      .filter(n => !n.archived)
+      .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt)
+      .slice(0, 4);
+  }, [notes]);
 
-  useEffect(() => {
-    void adjustDockWidth(false);
-    return () => {
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    };
-  }, [dockSide]);
+  const TOP0 = 138;
+  const PITCH = (769 - 138) / 3;
+  const slot = (i: number) => TOP0 + i * PITCH;
 
-  const handleCreateNew = async (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleCreateNew = async () => {
+    if (dockNotes.length >= 4) {
+      showToast('Side panel holds 4 notes — delete one first');
+      return;
+    }
     const fresh = createFreshNote();
+    fresh.color = dockNotes.length % FIGMA_COLORS.length;
     await saveNote(fresh);
-    await openFloatingNote(fresh);
+    setOpenNoteId(fresh.id);
+    void adjustDockWidth(true);
+  };
+
+  const handleDelete = async (n: Note) => {
+    setOpenNoteId(null);
+    await deleteNote(n.id);
+    showToast('Note deleted', n);
     void adjustDockWidth(false);
   };
 
-  const toggleTheme = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    const next = theme === 'light' ? 'dark' : 'light';
-    setTheme(next);
-    document.documentElement.setAttribute('data-theme', next);
+  const handleTextChange = (n: Note, newText: string) => {
+    const updated: Note = {
+      ...n,
+      body: newText,
+      updatedAt: Date.now(),
+    };
+    void saveNote(updated);
+  };
+
+  const handleTabEnter = (id: string) => {
+    setOpenNoteId(id);
+    void adjustDockWidth(true);
+  };
+
+  const handleTabLeave = (id: string) => {
+    setTimeout(() => {
+      setOpenNoteId(curr => {
+        if (curr === id) {
+          void adjustDockWidth(false);
+          return null;
+        }
+        return curr;
+      });
+    }, 150);
   };
 
   return (
-    <div className={`dock-container ${dockSide === 'left' ? 'is-left' : ''}`} data-theme={theme}>
-      {alarmBanner && (
-        <div className="desktop-toast-banner" onClick={() => setAlarmBanner(null)}>
-          <Bell size={15} color="#FFD43B" />
-          <span>{alarmBanner}</span>
-        </div>
-      )}
+    <>
+      <FigmaSvgDefs />
+      <div className="frame" ref={frameRef} id="frame">
+        <div className="dock" />
 
-      <aside
-        className={`dock-rail ${dockSide === 'left' ? 'is-left' : ''} ${expanded ? 'is-expanded' : ''}`}
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
-      >
-        {/* Header Handle */}
-        <header className="dock-header" onClick={() => void adjustDockWidth(!expanded)}>
-          <BrandBadge />
-          <button className="dock-collapse-btn" title="Collapse" onClick={() => void adjustDockWidth(false)}>
-            <ChevronRight size={16} style={{ transform: dockSide === 'left' ? (expanded ? 'rotate(180deg)' : 'none') : (expanded ? 'none' : 'rotate(180deg)') }} />
-          </button>
-        </header>
-
-        {/* Peeking Slivers / Notes Preview */}
-        <div className="dock-chips-list">
-          {peekingNotes.map(n => {
-            const colorMeta = NOTE_COLORS[n.color] || NOTE_COLORS[0];
-            const bg = theme === 'dark' ? colorMeta.darkBg : colorMeta.bg;
-            const ink = theme === 'dark' ? colorMeta.darkInk : colorMeta.ink;
+        <div id="tabs">
+          {dockNotes.map((n, idx) => {
+            const isOpen = openNoteId === n.id;
+            const col = FIGMA_COLORS[idx % 4];
 
             return (
               <div
                 key={n.id}
-                className="peek-sliver"
-                style={{ background: bg, color: ink, borderColor: colorMeta.border }}
-                onClick={async () => {
-                  await openFloatingNote(n);
-                  void adjustDockWidth(false);
+                className={`tab ${isOpen ? 'open' : ''}`}
+                style={{
+                  top: `${slot(idx)}px`,
+                  ['--d' as any]: `${350 + idx * 90}ms`,
                 }}
-                title={n.title || 'Untitled Note'}
+                onMouseEnter={() => handleTabEnter(n.id)}
+                onMouseLeave={() => handleTabLeave(n.id)}
+                onClick={() => {
+                  if (!isOpen) handleTabEnter(n.id);
+                }}
               >
-                {!expanded ? (
-                  <>
-                    {n.isChecklist ? <CheckSquare size={14} /> : <StickyNote size={14} />}
-                    {n.pinned && <div className="peek-indicator-dot" />}
-                    {n.reminderAt > 0 && <div className="peek-indicator-dot" style={{ background: '#FF4757', top: 4 }} />}
-                  </>
-                ) : (
-                  <>
-                    <div className="peek-card-header">
-                      <span className="peek-card-tag">{n.isChecklist ? 'Checklist' : 'Note'}</span>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                        {n.reminderAt > 0 && <Bell size={11} color="var(--brand-violet)" />}
-                        {n.pinned && <Pin size={12} fill="currentColor" />}
+                <svg width="199" height="199">
+                  <SvgShadow />
+                  <SvgShape colorIndex={idx} />
+                </svg>
+
+                <div className="card" style={{ ['--c' as any]: col }}>
+                  <div className="in">
+                    <div className="card-top-bar">
+                      <div
+                        className="grip"
+                        title="Double-click to float sticky note on desktop"
+                        onDoubleClick={async e => {
+                          e.stopPropagation();
+                          await openFloatingNote(n);
+                        }}
+                      >
+                        <i /><i /><i />
+                      </div>
+
+                      <div className="card-actions">
+                        <button
+                          type="button"
+                          className="card-action-btn"
+                          title="Float note on desktop"
+                          onClick={async e => {
+                            e.stopPropagation();
+                            await openFloatingNote(n);
+                          }}
+                        >
+                          <Maximize2 size={20} />
+                        </button>
+
+                        <button
+                          type="button"
+                          className="card-action-btn del"
+                          title="Delete note"
+                          onClick={e => {
+                            e.stopPropagation();
+                            void handleDelete(n);
+                          }}
+                        >
+                          <Trash2 size={20} />
+                        </button>
                       </div>
                     </div>
-                    <h4 className="peek-card-title">{n.title || 'Untitled note'}</h4>
-                    <p className="peek-card-snippet">
-                      {n.body ? n.body.replace(/\[[ x]\] /g, '') : 'Tap to open card...'}
-                    </p>
-                  </>
-                )}
+
+                    <div
+                      className="txt"
+                      contentEditable
+                      suppressContentEditableWarning
+                      onInput={e => handleTextChange(n, (e.target as HTMLElement).innerText)}
+                      onKeyDown={e => {
+                        if (e.key === 'Escape') {
+                          (e.target as HTMLElement).blur();
+                          setOpenNoteId(null);
+                          void adjustDockWidth(false);
+                        }
+                      }}
+                    >
+                      {n.body || n.title}
+                    </div>
+                  </div>
+                </div>
               </div>
             );
           })}
-
-          {peekingNotes.length === 0 && expanded && (
-            <div style={{ padding: '20px 10px', textAlign: 'center', fontSize: 12, opacity: 0.6 }}>
-              No notes yet. Click + to create your first sticky note!
-            </div>
-          )}
         </div>
 
-        {/* Footer Actions */}
-        <footer className="dock-footer">
-          <button className="dock-add-btn" title="Create floating note" onClick={handleCreateNew}>
-            <Plus size={20} strokeWidth={2.5} />
-          </button>
-          <button className="dock-action-btn" title="All notes & sync" onClick={openLibraryWindow}>
-            <Folder size={17} />
-          </button>
-          <button className="dock-action-btn" title="Toggle theme" onClick={toggleTheme}>
-            {theme === 'light' ? <Moon size={16} /> : <Sun size={16} />}
-          </button>
-        </footer>
-      </aside>
-    </div>
+        {/* Big Purple FAB with Rotating Plus */}
+        <button className="fab" onClick={handleCreateNew} aria-label="New note" title="Create new note">
+          <svg width="58" height="58" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+        </button>
+
+        {/* Rounded Folder Button to Open Full Library View */}
+        <button className="folder" onClick={openLibraryWindow} aria-label="Folders" title="All notes, checklists & sync">
+          <svg width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round">
+            <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+          </svg>
+        </button>
+      </div>
+
+      {/* Pill Toast Notification with Undo */}
+      {toastInfo && (
+        <div className={`toast ${toastInfo ? 'on' : ''}`}>
+          <span>{toastInfo.text}</span>
+          {toastInfo.undoNote && (
+            <button
+              type="button"
+              onClick={async () => {
+                if (toastInfo.undoNote) {
+                  await saveNote(toastInfo.undoNote);
+                  setToastInfo(null);
+                }
+              }}
+            >
+              Undo
+            </button>
+          )}
+        </div>
+      )}
+    </>
   );
 }
 
