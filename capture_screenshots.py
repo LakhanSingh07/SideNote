@@ -165,6 +165,30 @@ def run():
             ser_elem.screenshot(path=os.path.join(OUTPUT_DIR, "9_serif_editorial_note.png"))
         ser_page.close()
 
+        # 10. Library App Window Header with Full Controls
+        print("Capturing 10_library_app_window_controls.png...")
+        lib_page = context.new_page()
+        lib_page.set_viewport_size({"width": 940, "height": 650})
+        lib_page.goto("http://localhost:4173/?view=library")
+        lib_page.wait_for_selector(".window-controls-group")
+        time.sleep(1)
+        lib_elem = lib_page.query_selector(".library-header")
+        if lib_elem:
+            lib_elem.screenshot(path=os.path.join(OUTPUT_DIR, "10_library_app_window_controls.png"))
+        lib_page.close()
+
+        # 11. Sticky Note Top Bar with Minimize, Full Size, and Close
+        print("Capturing 11_sticky_note_window_controls.png...")
+        hdr_page = context.new_page()
+        hdr_page.set_viewport_size({"width": 380, "height": 450})
+        hdr_page.goto("http://localhost:4173/?view=note&id=sample-1")
+        hdr_page.wait_for_selector(".sticky-top-tape")
+        time.sleep(1)
+        hdr_elem = hdr_page.query_selector(".sticky-top-tape")
+        if hdr_elem:
+            hdr_elem.screenshot(path=os.path.join(OUTPUT_DIR, "11_sticky_note_window_controls.png"))
+        hdr_page.close()
+
         browser.close()
         print("All high-res screenshots successfully captured in SCREENSHOTS folder!")
 

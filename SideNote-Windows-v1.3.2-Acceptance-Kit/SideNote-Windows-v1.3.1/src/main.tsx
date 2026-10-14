@@ -5,7 +5,7 @@ import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { getCurrentWindow, LogicalPosition, LogicalSize, availableMonitors, currentMonitor } from '@tauri-apps/api/window';
 import {
   Plus, Search, Pin, Archive, Trash2, Settings, Minus, X,
-  StickyNote, ChevronRight, Check, CheckSquare, Square,
+  StickyNote, ChevronRight, Check, CheckSquare, Square, Maximize2, Minimize2,
   Moon, Sun, RefreshCw, Copy, Wifi, ShieldCheck, Folder, Sparkles, Move,
   Bold, Italic, Underline, Heading, List, Clock, Link as LinkIcon,
   Mic, RotateCcw, RotateCw, Bell, BellOff, Download, Upload, Volume2, Type
@@ -559,6 +559,13 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
   const [customReminderInput, setCustomReminderInput] = useState('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<'Saved' | 'Saving…'>('Saved');
+  const [isMaximized, setIsMaximized] = useState(false);
+
+  useEffect(() => {
+    if (native) {
+      getCurrentWindow().isMaximized().then(setIsMaximized).catch(() => {});
+    }
+  }, []);
 
   // Undo / Redo history
   const [history, setHistory] = useState<string[]>([]);
@@ -711,6 +718,34 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
 
   const handleMinimize = async () => {
     if (native) {
+      await getCurrentWindow().minimize();
+    } else {
+      window.dispatchEvent(new CustomEvent('sidenote_preview_close_float', { detail: note.id }));
+    }
+  };
+
+  const handleToggleMaximize = async () => {
+    if (native) {
+      try {
+        const w = getCurrentWindow();
+        const max = await w.isMaximized();
+        if (max) {
+          await w.unmaximize();
+          setIsMaximized(false);
+        } else {
+          await w.maximize();
+          setIsMaximized(true);
+        }
+      } catch (e) {
+        console.warn('Maximize error:', e);
+      }
+    } else {
+      setIsMaximized(prev => !prev);
+    }
+  };
+
+  const handleCloseNote = async () => {
+    if (native) {
       await persistPlacement(placementKey(note.id));
       await getCurrentWindow().close();
     } else {
@@ -720,7 +755,8 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
 
   const handleArchive = async () => {
     await updateFields({ archived: true });
-    await handleMinimize();
+    await handleCloseNote();
+    showToast('Note archived');
   };
 
   // Text formatting insertion helper
@@ -963,7 +999,7 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
       )}
 
       <div
-        className="floating-sticky-note"
+        className={`floating-sticky-note ${isMaximized ? 'is-maximized' : ''}`}
         style={{
           background: colorMeta.bg,
           color: colorMeta.ink,
@@ -998,14 +1034,40 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
               <Pin size={13} fill={pinned ? 'currentColor' : 'none'} />
             </button>
 
-            {/* Minimize to Edge Dock */}
-            <button className="sticky-icon-btn" title="Fold to edge dock" onClick={handleMinimize}>
-              <Minus size={14} />
+            {/* Archive Note */}
+            <button
+              className="sticky-icon-btn"
+              title="Archive note"
+              onClick={handleArchive}
+            >
+              <Archive size={13} />
             </button>
 
-            {/* Close / Archive */}
-            <button className="sticky-icon-btn" title="Archive note" onClick={handleArchive}>
-              <X size={14} />
+            {/* Minimize Window */}
+            <button
+              className="sticky-icon-btn"
+              title="Minimize window"
+              onClick={handleMinimize}
+            >
+              <Minus size={13} />
+            </button>
+
+            {/* Full Size / Maximize */}
+            <button
+              className="sticky-icon-btn"
+              title={isMaximized ? "Restore size" : "Full size / Maximize"}
+              onClick={handleToggleMaximize}
+            >
+              {isMaximized ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+            </button>
+
+            {/* Close Note Window */}
+            <button
+              className="sticky-icon-btn is-close"
+              title="Close note window"
+              onClick={handleCloseNote}
+            >
+              <X size={13} />
             </button>
           </div>
         </div>
@@ -1496,6 +1558,61 @@ function LibraryView() {
     reader.readAsText(file);
   };
 
+  const [isAppMaximized, setIsAppMaximized] = useState(false);
+
+  useEffect(() => {
+    if (native) {
+      getCurrentWindow().isMaximized().then(setIsAppMaximized).catch(() => {});
+    }
+  }, []);
+
+  const handleAppMinimize = async () => {
+    if (native) {
+      await getCurrentWindow().minimize();
+    } else {
+      window.dispatchEvent(new CustomEvent('sidenote_preview_close_library'));
+    }
+  };
+
+  const handleAppToggleMaximize = async () => {
+    if (native) {
+      try {
+        const w = getCurrentWindow();
+        const max = await w.isMaximized();
+        if (max) {
+          await w.unmaximize();
+          setIsAppMaximized(false);
+        } else {
+          await w.maximize();
+          setIsAppMaximized(true);
+        }
+      } catch (e) {
+        console.warn('App maximize error:', e);
+      }
+    } else {
+      setIsAppMaximized(prev => !prev);
+    }
+  };
+
+  const handleAppClose = async () => {
+    if (native) {
+      await getCurrentWindow().hide();
+    } else {
+      window.dispatchEvent(new CustomEvent('sidenote_preview_close_library'));
+    }
+  };
+
+  const handleLibraryDragMouseDown = (e: React.MouseEvent) => {
+    if (e.button === 0) {
+      const target = e.target as HTMLElement;
+      if (!target.closest('button, input, textarea, a, .window-controls-group, [data-no-drag]')) {
+        if (native) {
+          getCurrentWindow().startDragging().catch(console.warn);
+        }
+      }
+    }
+  };
+
   const handleToggleDockSide = (side: 'left' | 'right') => {
     setDockSide(side);
     localStorage.setItem('sidenote_dock_side', side);
@@ -1504,13 +1621,13 @@ function LibraryView() {
 
   return (
     <div className="library-window">
-      {/* Header */}
-      <header className="library-header">
-        <div className="library-brand-block">
+      {/* Header with Drag Region & Window Controls */}
+      <header className="library-header" data-tauri-drag-region onMouseDown={handleLibraryDragMouseDown}>
+        <div className="library-brand-block" data-tauri-drag-region>
           <BrandBadge />
         </div>
 
-        <nav className="library-tabs-nav">
+        <nav className="library-tabs-nav" data-no-drag onMouseDown={e => e.stopPropagation()}>
           <button className={`library-tab-btn ${tab === 'all' ? 'is-active' : ''}`} onClick={() => setTab('all')}>
             <StickyNote size={14} /> All ({notes.filter(n => !n.archived).length})
           </button>
@@ -1531,16 +1648,43 @@ function LibraryView() {
           </button>
         </nav>
 
-        <button
-          className="primary-btn"
-          onClick={async () => {
-            const fresh = createFreshNote();
-            await saveNote(fresh);
-            await openFloatingNote(fresh);
-          }}
-        >
-          <Plus size={16} /> New Note
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }} data-no-drag onMouseDown={e => e.stopPropagation()}>
+          <button
+            className="primary-btn"
+            onClick={async () => {
+              const fresh = createFreshNote();
+              await saveNote(fresh);
+              await openFloatingNote(fresh);
+            }}
+          >
+            <Plus size={16} /> New Note
+          </button>
+
+          {/* Window Control Buttons: Minimize, Full Size / Maximize, Close */}
+          <div className="window-controls-group">
+            <button
+              className="win-control-btn"
+              title="Minimize window"
+              onClick={handleAppMinimize}
+            >
+              <Minus size={15} />
+            </button>
+            <button
+              className="win-control-btn"
+              title={isAppMaximized ? "Restore Size" : "Full Size / Maximize"}
+              onClick={handleAppToggleMaximize}
+            >
+              {isAppMaximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            </button>
+            <button
+              className="win-control-btn is-close"
+              title="Close Note App"
+              onClick={handleAppClose}
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>
       </header>
 
       {/* Main Body */}
@@ -1788,15 +1932,18 @@ function BrowserDesktopSimulator() {
       setActiveFloatingNotes(prev => prev.filter(x => x.id !== id));
     };
     const handleOpenLib = () => setShowLibraryModal(true);
+    const handleCloseLib = () => setShowLibraryModal(false);
 
     window.addEventListener('sidenote_preview_float', handleFloat);
     window.addEventListener('sidenote_preview_close_float', handleCloseFloat);
     window.addEventListener('sidenote_preview_library', handleOpenLib);
+    window.addEventListener('sidenote_preview_close_library', handleCloseLib);
 
     return () => {
       window.removeEventListener('sidenote_preview_float', handleFloat);
       window.removeEventListener('sidenote_preview_close_float', handleCloseFloat);
       window.removeEventListener('sidenote_preview_library', handleOpenLib);
+      window.removeEventListener('sidenote_preview_close_library', handleCloseLib);
     };
   }, []);
 

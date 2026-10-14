@@ -1326,3 +1326,50 @@ input, textarea, button {
   from { opacity: 0; transform: translate(-50%, -20px); }
   to { opacity: 1; transform: translate(-50%, 0); }
 }
+
+/* ============================================================== */
+/* WINDOW CONTROLS & MAXIMIZED STYLES                             */
+/* ============================================================== */
+.window-controls-group {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 8px;
+  padding-left: 10px;
+  border-left: 1px solid var(--surface-border);
+}
+
+.win-control-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--ink-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.win-control-btn:hover {
+  background: var(--surface-field);
+  color: var(--ink-primary);
+}
+
+.win-control-btn.is-close:hover {
+  background: #ef4444;
+  color: #ffffff;
+}
+
+.sticky-icon-btn.is-close:hover {
+  background: rgba(239, 68, 68, 0.18);
+  color: #dc2626;
+}
+
+.floating-sticky-note.is-maximized {
+  border-radius: 0 !important;
+  border: none !important;
+}
+
