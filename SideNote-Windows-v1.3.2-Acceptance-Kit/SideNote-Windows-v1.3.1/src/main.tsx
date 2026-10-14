@@ -395,13 +395,16 @@ function EdgeDock() {
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const frameRef = useRef<HTMLDivElement>(null);
 
-  // Auto-fit frame to window height matching user's prototype
+  // Auto-fit frame to 70% window height matching user's exact specification
   useEffect(() => {
     const handleFit = () => {
-      const s = Math.min(0.85, (window.innerHeight - 24) / 1282);
+      const isSimulator = !native && view === 'main';
+      const targetH = isSimulator ? window.innerHeight * 0.70 : window.innerHeight;
+      const s = Math.min(0.85, (targetH - 16) / 1282);
       document.documentElement.style.setProperty('--s', String(s));
       if (frameRef.current) {
-        frameRef.current.style.top = `${((window.innerHeight - 1282 * s) / 2 - 33 * s)}px`;
+        const topOffset = (window.innerHeight - 1282 * s) / 2;
+        frameRef.current.style.top = `${topOffset}px`;
       }
     };
     handleFit();
@@ -427,7 +430,7 @@ function EdgeDock() {
     return () => clearInterval(interval);
   }, [notes]);
 
-  // Adjust native window dimensions when tab opens/closes
+  // Adjust native window dimensions when tab opens/closes (70% screen height only, snug footprint)
   const adjustDockWidth = async (isOpen: boolean) => {
     if (!native) return;
     try {
@@ -436,11 +439,16 @@ function EdgeDock() {
       if (!mon) return;
       const scale = mon.scaleFactor || 1;
       const screenWidth = mon.size.width / scale;
-      const s = Math.min(0.85, (window.innerHeight - 24) / 1282);
-      const targetWidth = isOpen ? Math.round(520 * s) : Math.round(180 * s);
-      const targetHeight = Math.round(1360 * s);
+      const screenHeight = mon.size.height / scale;
+
+      // 70% height only as requested
+      const targetHeight = Math.max(480, Math.round(screenHeight * 0.70));
+      const s = Math.min(0.85, (targetHeight - 16) / 1282);
+      
+      // Snug width: when closed, only the peeking tabs (~155px * s, approx 80px-90px); when open, 500px * s (approx 290px-330px)
+      const targetWidth = isOpen ? Math.round(520 * s) : Math.round(155 * s);
       const targetX = (mon.position.x / scale) + screenWidth - targetWidth;
-      const targetY = Math.max(20, ((mon.size.height / scale) - targetHeight) / 2);
+      const targetY = (mon.position.y / scale) + Math.round((screenHeight - targetHeight) / 2);
 
       await w.setSize(new LogicalSize(targetWidth, targetHeight));
       await w.setPosition(new LogicalPosition(targetX, targetY));
@@ -543,6 +551,18 @@ function EdgeDock() {
                   <SvgShadow />
                   <SvgShape colorIndex={idx} />
                 </svg>
+
+                {/* Note written text visible on peeking tabs */}
+                <div className="tab-preview">
+                  <div className="tab-preview-title">
+                    {n.title || (n.body ? n.body.split('\n')[0] : 'Note')}
+                  </div>
+                  {n.body && (
+                    <div className="tab-preview-body">
+                      {n.body.replace(/\n/g, ' ')}
+                    </div>
+                  )}
+                </div>
 
                 <div className="card" style={{ ['--c' as any]: col }}>
                   <div className="in">

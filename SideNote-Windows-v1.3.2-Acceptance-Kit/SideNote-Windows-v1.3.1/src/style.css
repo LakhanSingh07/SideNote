@@ -183,6 +183,52 @@ input, textarea, button {
   pointer-events: none;
 }
 
+/* Note written text visible on peeking tabs before hover */
+.tab-preview {
+  position: absolute;
+  left: 20px;
+  top: 36px;
+  width: 145px;
+  height: 125px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 0.2s cubic-bezier(0.2, 0.9, 0.2, 1);
+  overflow: hidden;
+  color: #2A2830;
+  z-index: 5;
+  padding: 6px 10px;
+}
+
+.tab.open .tab-preview {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.tab-preview-title {
+  font-size: 19px;
+  font-weight: 700;
+  line-height: 23px;
+  color: #1F2226;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 4px;
+}
+
+.tab-preview-body {
+  font-size: 14px;
+  line-height: 19px;
+  color: rgba(31, 34, 38, 0.74);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
 /* popup card: the tab itself grows leftwards (199x199 -> 474x288), tab stays in the panel */
 .card {
   position: absolute;
