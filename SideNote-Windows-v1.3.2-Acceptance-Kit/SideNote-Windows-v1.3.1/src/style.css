@@ -186,10 +186,10 @@ input, textarea, button {
 /* Note written text visible on peeking tabs before hover */
 .tab-preview {
   position: absolute;
-  left: 20px;
-  top: 36px;
-  width: 145px;
-  height: 125px;
+  left: 44px;
+  top: 32px;
+  width: 140px;
+  height: 135px;
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
@@ -199,7 +199,7 @@ input, textarea, button {
   overflow: hidden;
   color: #2A2830;
   z-index: 5;
-  padding: 6px 10px;
+  padding: 4px 6px;
 }
 
 .tab.open .tab-preview {
@@ -208,9 +208,9 @@ input, textarea, button {
 }
 
 .tab-preview-title {
-  font-size: 19px;
+  font-size: 21px;
   font-weight: 700;
-  line-height: 23px;
+  line-height: 25px;
   color: #1F2226;
   white-space: nowrap;
   overflow: hidden;
@@ -219,9 +219,9 @@ input, textarea, button {
 }
 
 .tab-preview-body {
-  font-size: 14px;
-  line-height: 19px;
-  color: rgba(31, 34, 38, 0.74);
+  font-size: 15px;
+  line-height: 20px;
+  color: rgba(31, 34, 38, 0.78);
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;

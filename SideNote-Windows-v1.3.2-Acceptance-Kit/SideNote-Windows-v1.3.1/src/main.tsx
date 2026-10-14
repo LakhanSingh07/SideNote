@@ -445,8 +445,8 @@ function EdgeDock() {
       const targetHeight = Math.max(480, Math.round(screenHeight * 0.70));
       const s = Math.min(0.85, (targetHeight - 16) / 1282);
       
-      // Snug width: when closed, only the peeking tabs (~155px * s, approx 80px-90px); when open, 500px * s (approx 290px-330px)
-      const targetWidth = isOpen ? Math.round(520 * s) : Math.round(155 * s);
+      // Full breathing room: when closed, 230px * s so peeking tabs and curved notches are NEVER clipped (~110-130px); when open, 530px * s (~260-310px)
+      const targetWidth = isOpen ? Math.round(530 * s) : Math.round(230 * s);
       const targetX = (mon.position.x / scale) + screenWidth - targetWidth;
       const targetY = (mon.position.y / scale) + Math.round((screenHeight - targetHeight) / 2);
 
@@ -555,11 +555,11 @@ function EdgeDock() {
                 {/* Note written text visible on peeking tabs */}
                 <div className="tab-preview">
                   <div className="tab-preview-title">
-                    {n.title || (n.body ? n.body.split('\n')[0] : 'Note')}
+                    {n.title.trim() || (n.body ? n.body.split('\n')[0].replace(/^\[[ x]\]\s*/i, '').slice(0, 20) : 'Note')}
                   </div>
                   {n.body && (
                     <div className="tab-preview-body">
-                      {n.body.replace(/\n/g, ' ')}
+                      {(n.title.trim() ? n.body : n.body.split('\n').slice(1).join(' ')).replace(/\n/g, ' ')}
                     </div>
                   )}
                 </div>
