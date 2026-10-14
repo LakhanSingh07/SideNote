@@ -166,9 +166,12 @@ object NoteEditor {
         root.addView(head)
         root.addView(Ui.space(context, 14))
 
+        var currentFontId = NoteFontManager.getFontForNote(context, original.id)
+
         val title = EditText(context).apply {
             hint = "Title"; setSingleLine(true); setText(original.title)
             setTextColor(Ui.ink); setHintTextColor(Ui.muted); textSize = 18f
+            typeface = NoteFontManager.getTypeface(context, currentFontId, bold = true)
             background = Ui.bg(Ui.field, Ui.dp(context, 14).toFloat())
             setPadding(Ui.dp(context, 14), Ui.dp(context, 12), Ui.dp(context, 14), Ui.dp(context, 12))
             contentDescription = "Note title"
@@ -201,7 +204,9 @@ object NoteEditor {
         // Text body editor (unconstrained maxLines so typing flows naturally)
         val body = EditText(context).apply {
             hint = if (isChecklistMode) "[ ] First task…" else "Write something lovely…"
-            setText(RichTextFormatter.fromStorageString(original.body)); minLines = 5; textSize = 15f; gravity = Gravity.TOP
+            setText(RichTextFormatter.fromStorageString(original.body)); minLines = 5
+            textSize = if (currentFontId == NoteFontManager.FONT_CURSIVE) 17f else 15f; gravity = Gravity.TOP
+            typeface = NoteFontManager.getTypeface(context, currentFontId, bold = false)
             setTextColor(Ui.ink); setHintTextColor(Ui.muted)
             background = Ui.bg(Ui.field, Ui.dp(context, 16).toFloat())
             setPadding(Ui.dp(context, 14), Ui.dp(context, 14), Ui.dp(context, 14), Ui.dp(context, 14))
@@ -345,7 +350,9 @@ object NoteEditor {
                         this.isChecked = isChecked
                     }
                     val taskTv = EditText(context).apply {
-                        setText(taskCleanText); textSize = 14f
+                        setText(taskCleanText)
+                        textSize = if (currentFontId == NoteFontManager.FONT_CURSIVE) 16f else 14f
+                        typeface = NoteFontManager.getTypeface(context, currentFontId, bold = false)
                         setTextColor(if (isChecked) Ui.muted else Ui.ink)
                         background = null; setSingleLine(false); maxLines = 3
                         setPadding(Ui.dp(context, 4), Ui.dp(context, 4), Ui.dp(context, 4), Ui.dp(context, 4))
@@ -561,6 +568,26 @@ object NoteEditor {
                 context.startActivity(intent)
             } catch (e: Exception) {
                 Toast.makeText(context, "Voice input not available", Toast.LENGTH_SHORT).show()
+            }
+        }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = Ui.dp(context, 6) })
+
+        fun applyCurrentFont(fontId: String) {
+            currentFontId = fontId
+            title.typeface = NoteFontManager.getTypeface(context, fontId, bold = true)
+            body.typeface = NoteFontManager.getTypeface(context, fontId, bold = false)
+            body.textSize = if (fontId == NoteFontManager.FONT_CURSIVE) 17f else 15f
+            newTaskInput.typeface = NoteFontManager.getTypeface(context, fontId, bold = false)
+            renderChecklistItems()
+        }
+
+        toolbar.addView(toolBtn(R.drawable.ic_font, "Font", "Choose note font") {
+            NoteFontManager.showFontPickerDialog(context, currentFontId) { chosenFontId ->
+                applyCurrentFont(chosenFontId)
+                NoteFontManager.setFontForNote(context, original.id, chosenFontId)
+                dirty = true
+                scheduleSave()
+                val item = NoteFontManager.FONTS.find { it.id == chosenFontId }
+                Toast.makeText(context, "Font: ${item?.displayName ?: chosenFontId}", Toast.LENGTH_SHORT).show()
             }
         }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = Ui.dp(context, 6) })
 

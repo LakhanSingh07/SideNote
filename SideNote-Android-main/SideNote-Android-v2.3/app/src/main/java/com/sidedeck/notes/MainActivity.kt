@@ -412,7 +412,15 @@ class MainActivity : Activity() {
             head.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
             head.addView(Ui.text(this, DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(note.updatedAt)), 11f, false, Ui.muted))
             box.addView(head); box.addView(Ui.space(this, 12))
-            box.addView(Ui.text(this, note.title.ifBlank { "Untitled note" }, 17f, true).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END })
+            val noteFont = NoteFontManager.getFontForNote(this, note.id)
+            val noteTf = NoteFontManager.getTypeface(this, noteFont, bold = false)
+            val noteTfBold = NoteFontManager.getTypeface(this, noteFont, bold = true)
+
+            box.addView(Ui.text(this, note.title.ifBlank { "Untitled note" }, 17f, true).apply {
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                typeface = noteTfBold
+            })
             box.addView(Ui.space(this, 8))
 
             // Interactive To-Do preview vs standard note preview
@@ -428,8 +436,9 @@ class MainActivity : Activity() {
                     val cb = CheckBox(this).apply {
                         isChecked = checked
                     }
-                    val tv = Ui.text(this, taskClean, 13f, false, if (checked) Ui.muted else Ui.ink).apply {
+                    val tv = Ui.text(this, taskClean, if (noteFont == NoteFontManager.FONT_CURSIVE) 14.5f else 13f, false, if (checked) Ui.muted else Ui.ink).apply {
                         maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END
+                        typeface = noteTf
                     }
                     Ui.strikeThrough(tv, checked)
 
@@ -458,7 +467,8 @@ class MainActivity : Activity() {
                 val preview = if (richSpanned.isBlank()) "Tap to start writing…" else richSpanned
                 val tv = TextView(this).apply {
                     text = preview
-                    textSize = 13f
+                    textSize = if (noteFont == NoteFontManager.FONT_CURSIVE) 15f else 13f
+                    typeface = noteTf
                     setTextColor(if (Ui.dark) Ui.muted else Color.rgb(81, 85, 85))
                     maxLines = 4
                     ellipsize = android.text.TextUtils.TruncateAt.END

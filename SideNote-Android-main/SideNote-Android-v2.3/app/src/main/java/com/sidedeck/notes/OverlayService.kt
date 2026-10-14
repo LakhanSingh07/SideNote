@@ -1230,10 +1230,12 @@ class OverlayService : Service() {
         var isArchived = note.archived
         var chosenReminderAt = note.reminderAt
         var chosenColor = note.color.coerceIn(0, 5)
+        var noteFontId = NoteFontManager.getFontForNote(this, note.id)
 
         // ── Title & Body Views ───────────────────────────────────────
         val titleEdit = EditText(this).apply {
             hint = "Title"; setSingleLine(true); setText(note.title); textSize = 17f
+            typeface = NoteFontManager.getTypeface(this@OverlayService, noteFontId, bold = true)
             setTextColor(Ui.ink); setHintTextColor(Ui.muted)
             background = Ui.bg(Ui.field, Ui.dp(context, 12).toFloat())
             setPadding(Ui.dp(context, 12), Ui.dp(context, 10), Ui.dp(context, 12), Ui.dp(context, 10))
@@ -1241,7 +1243,9 @@ class OverlayService : Service() {
 
         val bodyEdit = EditText(this).apply {
             hint = if (note.isChecklist) "[ ] First task…" else "Write your note…"
-            setText(RichTextFormatter.fromStorageString(note.body)); textSize = 14f; gravity = Gravity.TOP
+            setText(RichTextFormatter.fromStorageString(note.body))
+            textSize = if (noteFontId == NoteFontManager.FONT_CURSIVE) 16f else 14f; gravity = Gravity.TOP
+            typeface = NoteFontManager.getTypeface(this@OverlayService, noteFontId, bold = false)
             setTextColor(Ui.ink); setHintTextColor(Ui.muted)
             background = Ui.bg(Ui.field, Ui.dp(context, 12).toFloat())
             setPadding(Ui.dp(context, 12), Ui.dp(context, 10), Ui.dp(context, 12), Ui.dp(context, 10))
@@ -1480,6 +1484,20 @@ class OverlayService : Service() {
                 startActivity(intent)
             } catch (e: Exception) {
                 Toast.makeText(this, "Could not start voice dictation", Toast.LENGTH_SHORT).show()
+            }
+        }, gap)
+        toolbar.addView(fmtIconBtn(R.drawable.ic_font, "Font style") {
+            val currFont = NoteFontManager.getFontForNote(this, note.id)
+            NoteFontManager.showFontPickerDialog(this, currFont) { chosenFont ->
+                NoteFontManager.setFontForNote(this, note.id, chosenFont)
+                noteFontId = chosenFont
+                titleEdit.typeface = NoteFontManager.getTypeface(this@OverlayService, chosenFont, bold = true)
+                bodyEdit.typeface = NoteFontManager.getTypeface(this@OverlayService, chosenFont, bold = false)
+                bodyEdit.textSize = if (chosenFont == NoteFontManager.FONT_CURSIVE) 16f else 14f
+                dirty = true
+                scheduleChange()
+                val item = NoteFontManager.FONTS.find { it.id == chosenFont }
+                Toast.makeText(this, "Font: ${item?.displayName ?: chosenFont}", Toast.LENGTH_SHORT).show()
             }
         }, gap)
         root.addView(toolbar)
