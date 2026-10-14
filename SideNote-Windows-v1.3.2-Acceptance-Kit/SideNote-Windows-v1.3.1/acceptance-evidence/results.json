@@ -1,0 +1,10 @@
+﻿{
+    "prerequisite-node":  "PASS",
+    "prerequisite-npm":  "PASS",
+    "prerequisite-cargo":  "PASS",
+    "prerequisite-rustc":  "PASS",
+    "npm-install":  "PASS",
+    "frontend-build":  "PASS",
+    "rust-check":  "PASS",
+    "rust-tests":  "PASS"
+}

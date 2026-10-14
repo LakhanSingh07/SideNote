@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="sidenote_gold">#E5C968</color>
+    <color name="sidenote_dark">#14171A</color>
+    <color name="sidenote_cream">#FAF8F0</color>
+    <style name="Theme.SideNote" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:colorAccent">@color/sidenote_gold</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowBackground">@color/sidenote_cream</item>
+    </style>
+    <style name="Theme.SideNote.Dark" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:colorAccent">@color/sidenote_gold</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowBackground">@color/sidenote_dark</item>
+    </style>
+</resources>

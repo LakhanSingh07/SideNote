@@ -1,0 +1,18 @@
+# Gradle build cache & outputs
+.gradle/
+build/
+**/build/
+*.hprof
+*.pyc
+build_out*.txt
+
+# IDE files
+.idea/
+*.iml
+.DS_Store
+local.properties
+.navigation/
+captures/
+
+# OS temporary files
+Thumbs.db
