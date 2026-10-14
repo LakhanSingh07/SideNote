@@ -9,6 +9,7 @@ import {
   Moon, Sun, RefreshCw, Copy, Wifi, ShieldCheck, Folder, Sparkles, Move
 } from 'lucide-react';
 import './style.css';
+import appLogo from './assets/logo.png';
 
 // Note Data Model compatible with Android and Windows SQLite
 export type Note = {
@@ -210,8 +211,14 @@ async function spawnWindow(label: string, url: string, width: number, height: nu
     decorations: false,
     transparent: true,
     alwaysOnTop: true,
+    shadow: false,
     resizable: true,
     focus: true,
+  });
+  w.once('tauri://created', async () => {
+    try {
+      await (w as any).setShadow(false);
+    } catch {}
   });
   w.once('tauri://error', e => console.error('Failed to spawn window', e));
   return true;
@@ -271,7 +278,7 @@ function BrandBadge() {
   return (
     <div className="dock-brand">
       <div className="dock-logo-badge" title="SideNote">
-        <StickyNote size={19} strokeWidth={2.4} />
+        <img src={appLogo} alt="SideNote" />
       </div>
       <span className="dock-title-text">
         SideNote<span className="dock-title-dot">.</span>
@@ -582,8 +589,19 @@ function FloatingNoteCard() {
     await updateFields({ body: newBody });
   };
 
+  const handleDragMouseDown = (e: React.MouseEvent) => {
+    if (e.button === 0) {
+      const target = e.target as HTMLElement;
+      if (!target.closest('button, input, textarea, .color-swatch-dot, [data-no-drag]')) {
+        if (native) {
+          getCurrentWindow().startDragging().catch(console.warn);
+        }
+      }
+    }
+  };
+
   return (
-    <div className="floating-card-wrapper">
+    <div className="floating-card-wrapper" onMouseDown={handleDragMouseDown}>
       <div
         className="floating-sticky-note"
         style={{
@@ -593,12 +611,13 @@ function FloatingNoteCard() {
         }}
       >
         {/* Top Accent Tape with Drag Region */}
-        <div className="sticky-top-tape" data-tauri-drag-region>
-          <div className="sticky-badge-group">
-            <span className="sticky-badge">{isChecklist ? 'Checklist' : 'Sticky Note'}</span>
+        <div className="sticky-top-tape" data-tauri-drag-region onMouseDown={handleDragMouseDown}>
+          <div className="sticky-badge-group" data-tauri-drag-region onMouseDown={handleDragMouseDown}>
+            <img src={appLogo} alt="" style={{ width: 15, height: 15, objectFit: 'contain', pointerEvents: 'none' }} />
+            <span className="sticky-badge" style={{ pointerEvents: 'none' }}>{isChecklist ? 'Checklist' : 'Sticky Note'}</span>
           </div>
 
-          <div className="sticky-actions">
+          <div className="sticky-actions" data-no-drag onMouseDown={e => e.stopPropagation()}>
             {/* Checklist Toggle */}
             <button
               className={`sticky-icon-btn ${isChecklist ? 'is-active' : ''}`}
@@ -1039,7 +1058,10 @@ function FloatingNoteSim({ note }: { note: Note }) {
       }}
     >
       <div className="sticky-top-tape">
-        <span className="sticky-badge">{note.isChecklist ? 'Checklist' : 'Sticky Note'}</span>
+        <div className="sticky-badge-group">
+          <img src={appLogo} alt="" style={{ width: 14, height: 14, objectFit: 'contain' }} />
+          <span className="sticky-badge">{note.isChecklist ? 'Checklist' : 'Sticky Note'}</span>
+        </div>
         <div className="sticky-actions">
           <button className="sticky-icon-btn" title="Pin">
             <Pin size={13} fill={note.pinned ? 'currentColor' : 'none'} />
