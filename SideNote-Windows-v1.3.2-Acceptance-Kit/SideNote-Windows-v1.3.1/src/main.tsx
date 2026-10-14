@@ -233,6 +233,7 @@ async function spawnWindow(label: string, url: string, width: number, height: nu
     await prior.setFocus();
     return true;
   }
+  const isLib = label.startsWith('library');
   const w = new WebviewWindow(label, {
     url,
     title: 'SideNote',
@@ -242,9 +243,11 @@ async function spawnWindow(label: string, url: string, width: number, height: nu
     y,
     decorations: false,
     transparent: true,
-    alwaysOnTop: true,
+    alwaysOnTop: !isLib,
     shadow: false,
     resizable: true,
+    minimizable: true,
+    maximizable: true,
     focus: true,
   });
   w.once('tauri://created', async () => {
@@ -551,6 +554,8 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
   const [showReminderModal, setShowReminderModal] = useState(false);
   const [showLinkModal, setShowLinkModal] = useState(false);
   const [showFontModal, setShowFontModal] = useState(false);
+  const [showVoiceModal, setShowVoiceModal] = useState(false);
+  const [voiceInputDraft, setVoiceInputDraft] = useState('');
   const [selectedFont, setSelectedFont] = useState<string>(() => {
     return localStorage.getItem('sidenote_font_' + (effectiveId || '')) || localStorage.getItem('sidenote_default_font') || 'roboto';
   });
@@ -584,9 +589,13 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
     if (effectiveId) {
       localStorage.setItem('sidenote_font_' + effectiveId, fontId);
     }
+    if (note?.id) {
+      localStorage.setItem('sidenote_font_' + note.id, fontId);
+    }
+    localStorage.setItem('sidenote_default_font', fontId);
     setShowFontModal(false);
     const found = NOTE_FONTS.find(f => f.id === fontId);
-    showToast(`Font set to ${found?.name || fontId}`);
+    showToast(`Font: ${found?.name || fontId}`);
   };
 
   useEffect(() => {
@@ -597,6 +606,9 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
       setPinned(note.pinned);
       setColor(note.color);
       setReminderAt(note.reminderAt || 0);
+
+      const storedFont = localStorage.getItem('sidenote_font_' + (note.id || effectiveId || '')) || localStorage.getItem('sidenote_default_font') || 'roboto';
+      setSelectedFont(storedFont);
 
       // Initialize history stack on first note load
       if (history.length === 0) {
@@ -718,7 +730,11 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
 
   const handleMinimize = async () => {
     if (native) {
-      await getCurrentWindow().minimize();
+      try {
+        await getCurrentWindow().minimize();
+      } catch (e) {
+        console.warn('Minimize error:', e);
+      }
     } else {
       window.dispatchEvent(new CustomEvent('sidenote_preview_close_float', { detail: note.id }));
     }
@@ -738,6 +754,10 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
         }
       } catch (e) {
         console.warn('Maximize error:', e);
+        try {
+          await (getCurrentWindow() as any).toggleMaximize();
+        } catch {}
+        setIsMaximized(prev => !prev);
       }
     } else {
       setIsMaximized(prev => !prev);
@@ -823,9 +843,12 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
 
   // Voice Speech-to-Text dictation toggle
   const toggleDictation = () => {
+    if (textareaRef.current) {
+      textareaRef.current.focus();
+    }
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      showToast('Speech recognition not supported in this browser.');
+      setShowVoiceModal(true);
       return;
     }
     if (isListening && recognitionRef.current) {
@@ -974,7 +997,7 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
   const handleDragMouseDown = (e: React.MouseEvent) => {
     if (e.button === 0) {
       const target = e.target as HTMLElement;
-      if (!target.closest('button, input, textarea, .color-swatch-dot, .preset-btn, [data-no-drag]')) {
+      if (!target.closest('button, input, textarea, a, .color-swatch-dot, .preset-btn, .checklist-checkbox, .font-preset-item, .sticky-actions, .note-popup-overlay, .note-popup-card, [data-no-drag]')) {
         if (native) {
           getCurrentWindow().startDragging().catch(console.warn);
         }
@@ -990,7 +1013,7 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
   const charCount = body.length;
 
   return (
-    <div className="floating-card-wrapper" onMouseDown={handleDragMouseDown}>
+    <div className="floating-card-wrapper">
       {toastMessage && (
         <div className="desktop-toast-banner" onClick={() => setToastMessage(null)}>
           <Sparkles size={14} color="#FFF" />
@@ -1243,16 +1266,20 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
               onKeyDown={handleTextareaKeyDown}
             />
           ) : (
-            <div className="checklist-container">
+            <div className="checklist-container" data-no-drag onMouseDown={e => e.stopPropagation()}>
               {checklistItems.map((item, idx) => (
-                <div key={idx} className="checklist-item-row">
-                  <div
+                <div key={idx} className="checklist-item-row" data-no-drag onMouseDown={e => e.stopPropagation()}>
+                  <button
+                    type="button"
                     className={`checklist-checkbox ${item.isDone ? 'is-checked' : ''}`}
-                    onClick={() => void toggleChecklistItem(idx)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void toggleChecklistItem(idx);
+                    }}
                     title={item.isDone ? 'Mark incomplete' : 'Mark complete'}
                   >
                     {item.isDone && <Check size={12} strokeWidth={3} />}
-                  </div>
+                  </button>
                   <input
                     className={`checklist-item-text ${item.isDone ? 'is-done' : ''} ${fontClass}`}
                     value={item.text}
@@ -1260,6 +1287,7 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
                     onBlur={handleFinishEditChecklistItem}
                   />
                   <button
+                    type="button"
                     className="checklist-delete-btn"
                     title="Delete item"
                     onClick={() => void deleteChecklistItem(idx)}
@@ -1403,32 +1431,90 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
 
         {/* Font Style Selection Popup */}
         {showFontModal && (
-          <div className="note-popup-overlay" onClick={() => setShowFontModal(false)}>
-            <div className="note-popup-card" onClick={e => e.stopPropagation()} style={{ maxWidth: 310 }}>
+          <div className="note-popup-overlay" data-no-drag onMouseDown={e => e.stopPropagation()} onClick={() => setShowFontModal(false)}>
+            <div className="note-popup-card" data-no-drag onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()} style={{ maxWidth: 310 }}>
               <h3 className="popup-title">
                 <Type size={16} color="var(--brand-violet)" /> Choose Note Font
               </h3>
               <p style={{ margin: '0 0 10px 0', fontSize: 11, color: 'var(--ink-secondary)', lineHeight: 1.4 }}>
                 Pick a font style for this sticky note (cute cursive, serif, clean sans, etc.):
               </p>
-              <div className="font-preset-list">
+              <div className="font-preset-list" data-no-drag onMouseDown={e => e.stopPropagation()}>
                 {NOTE_FONTS.map(f => (
-                  <div
+                  <button
                     key={f.id}
+                    type="button"
                     className={`font-preset-item ${selectedFont === f.id ? 'is-selected' : ''}`}
-                    onClick={() => handleSelectFont(f.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleSelectFont(f.id);
+                    }}
                   >
                     <div className="font-item-info">
                       <span className={`font-item-name ${f.class}`}>{f.name}</span>
                       <span className="font-item-category">{f.category}</span>
                     </div>
                     <span className={`font-preview-sample ${f.class}`}>{f.sample}</span>
-                  </div>
+                  </button>
                 ))}
               </div>
               <div className="popup-actions" style={{ marginTop: 12 }}>
                 <button className="popup-btn-secondary" onClick={() => setShowFontModal(false)}>
                   Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Voice Speech-to-Text Modal Overlay */}
+        {showVoiceModal && (
+          <div className="note-popup-overlay" data-no-drag onMouseDown={e => e.stopPropagation()} onClick={() => setShowVoiceModal(false)}>
+            <div className="note-popup-card" data-no-drag onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()} style={{ maxWidth: 330 }}>
+              <h3 className="popup-title">
+                <Mic size={16} color="var(--brand-violet)" /> Voice Speech Dictation
+              </h3>
+              <div style={{ background: 'var(--brand-soft)', border: '1px solid rgba(138, 75, 255, 0.25)', borderRadius: 10, padding: '10px 12px', margin: '8px 0 12px' }}>
+                <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: 'var(--brand-violet)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span>🎙️ Windows Voice Typing</span>
+                </p>
+                <p style={{ margin: '4px 0 0 0', fontSize: 11, color: 'var(--ink-secondary)', lineHeight: 1.45 }}>
+                  Press <kbd style={{ background: '#FFF', padding: '2px 6px', borderRadius: 4, border: '1px solid #CCC', fontWeight: 800, color: '#333' }}>Win + H</kbd> on your keyboard to instantly dictate anywhere in this note using Windows AI voice!
+                </p>
+              </div>
+
+              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-secondary)', display: 'block', marginBottom: 4 }}>
+                Or quick type / paste voice note text:
+              </span>
+              <textarea
+                className="popup-input"
+                style={{ height: 68, resize: 'none' }}
+                placeholder="Speak or paste text here…"
+                value={voiceInputDraft}
+                onChange={e => setVoiceInputDraft(e.target.value)}
+                autoFocus
+              />
+
+              <div className="popup-actions" style={{ marginTop: 10 }}>
+                <button className="popup-btn-secondary" onClick={() => setShowVoiceModal(false)}>
+                  Cancel
+                </button>
+                <button
+                  className="popup-btn-primary"
+                  onClick={() => {
+                    if (voiceInputDraft.trim()) {
+                      const sep = body.length > 0 && !body.endsWith(' ') && !body.endsWith('\n') ? '\n' : '';
+                      const next = body + sep + voiceInputDraft.trim();
+                      setBody(next);
+                      pushHistory(next);
+                      void updateFields({ body: next });
+                      setVoiceInputDraft('');
+                      showToast('Voice note added!');
+                    }
+                    setShowVoiceModal(false);
+                  }}
+                >
+                  Insert Note
                 </button>
               </div>
             </div>
@@ -1568,7 +1654,11 @@ function LibraryView() {
 
   const handleAppMinimize = async () => {
     if (native) {
-      await getCurrentWindow().minimize();
+      try {
+        await getCurrentWindow().minimize();
+      } catch (e) {
+        console.warn('App minimize error:', e);
+      }
     } else {
       window.dispatchEvent(new CustomEvent('sidenote_preview_close_library'));
     }
@@ -1588,6 +1678,10 @@ function LibraryView() {
         }
       } catch (e) {
         console.warn('App maximize error:', e);
+        try {
+          await (getCurrentWindow() as any).toggleMaximize();
+        } catch {}
+        setIsAppMaximized(prev => !prev);
       }
     } else {
       setIsAppMaximized(prev => !prev);

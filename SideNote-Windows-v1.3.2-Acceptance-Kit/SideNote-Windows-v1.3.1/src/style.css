@@ -1373,3 +1373,45 @@ input, textarea, button {
   border: none !important;
 }
 
+/* ============================================================== */
+/* NOTE FONT STYLES (5 Curated Typographies)                       */
+/* ============================================================== */
+.font-roboto,
+input.font-roboto,
+textarea.font-roboto {
+  font-family: 'Roboto', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
+}
+
+.font-caveat,
+input.font-caveat,
+textarea.font-caveat {
+  font-family: 'Caveat', cursive, sans-serif !important;
+  font-size: 1.18em !important;
+  letter-spacing: 0.35px !important;
+  line-height: 1.45 !important;
+}
+
+.font-nunito,
+input.font-nunito,
+textarea.font-nunito {
+  font-family: 'Nunito', -apple-system, BlinkMacSystemFont, sans-serif !important;
+  font-weight: 600 !important;
+}
+
+.font-lora,
+input.font-lora,
+textarea.font-lora {
+  font-family: 'Lora', Georgia, serif !important;
+  letter-spacing: 0.15px !important;
+  line-height: 1.6 !important;
+}
+
+.font-mono,
+input.font-mono,
+textarea.font-mono {
+  font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace !important;
+  font-size: 0.94em !important;
+  letter-spacing: -0.2px !important;
+}
+
+
