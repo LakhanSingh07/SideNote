@@ -325,6 +325,7 @@ input, textarea, button {
   height: 5.5px;
   border-radius: 3px;
   background: #777;
+  pointer-events: none;
 }
 
 .card-actions {

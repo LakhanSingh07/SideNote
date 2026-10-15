@@ -400,12 +400,24 @@ function EdgeDock() {
   const isBusyRef = useRef(false);
   const collapseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Auto-fit frame to 70% window height matching user's exact specification
+  // Drag reordering state
+  const [customOrder, setCustomOrder] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem('sidenote_dock_order');
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dragTop, setDragTop] = useState<number | null>(null);
+
+  // Auto-fit frame to smaller 55% window height matching user's request
   useEffect(() => {
     const handleFit = () => {
       const isSimulator = !native && view === 'main';
-      const targetH = isSimulator ? window.innerHeight * 0.70 : window.innerHeight;
-      const s = Math.min(0.85, (targetH - 16) / 1282);
+      const targetH = isSimulator ? window.innerHeight * 0.55 : window.innerHeight;
+      const s = Math.min(0.75, (targetH - 12) / 1282);
       document.documentElement.style.setProperty('--s', String(s));
       if (frameRef.current) {
         const topOffset = (window.innerHeight - 1282 * s) / 2;
@@ -435,7 +447,7 @@ function EdgeDock() {
     return () => clearInterval(interval);
   }, [notes]);
 
-  // Smooth OS window sizing with zero tear & zero flicker
+  // Smooth OS window sizing with zero tear & zero flicker (compact 55% height)
   const adjustDockWidth = async (isOpen: boolean) => {
     if (!native) return;
     try {
@@ -446,10 +458,11 @@ function EdgeDock() {
       const screenWidth = mon.size.width / scale;
       const screenHeight = mon.size.height / scale;
 
-      const targetHeight = Math.max(480, Math.round(screenHeight * 0.70));
-      const s = Math.min(0.85, (targetHeight - 16) / 1282);
+      // Compact 55% height
+      const targetHeight = Math.max(380, Math.round(screenHeight * 0.55));
+      const s = Math.min(0.75, (targetHeight - 12) / 1282);
       
-      const targetWidth = isOpen ? Math.round(530 * s) : Math.round(230 * s);
+      const targetWidth = isOpen ? Math.round(520 * s) : Math.round(220 * s);
       const targetX = (mon.position.x / scale) + screenWidth - targetWidth;
       const targetY = (mon.position.y / scale) + Math.round((screenHeight - targetHeight) / 2);
 
@@ -484,8 +497,10 @@ function EdgeDock() {
   };
 
   const collapseDock = () => {
+    if (draggingIdRef.current) return; // Don't collapse while dragging!
     if (collapseTimerRef.current) clearTimeout(collapseTimerRef.current);
     collapseTimerRef.current = setTimeout(() => {
+      if (draggingIdRef.current) return;
       // Don't collapse if user is actively focused/typing in an editor!
       if (document.activeElement && document.activeElement.classList.contains('txt')) {
         return;
@@ -516,17 +531,91 @@ function EdgeDock() {
     }, undoNote ? 6000 : 2500);
   };
 
-  // 4 recent notes displayed in the peeking tabs
+  // 4 recent notes displayed in the peeking tabs with custom drag order support
   const dockNotes = useMemo(() => {
-    return notes
-      .filter(n => !n.archived)
+    const unarchived = notes.filter(n => !n.archived);
+    if (customOrder.length > 0) {
+      return unarchived
+        .sort((a, b) => {
+          const idxA = customOrder.indexOf(a.id);
+          const idxB = customOrder.indexOf(b.id);
+          if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+          if (idxA !== -1) return -1;
+          if (idxB !== -1) return 1;
+          return Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt;
+        })
+        .slice(0, 4);
+    }
+    return unarchived
       .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt)
       .slice(0, 4);
-  }, [notes]);
+  }, [notes, customOrder]);
 
   const TOP0 = 138;
   const PITCH = (769 - 138) / 3;
   const slot = (i: number) => TOP0 + i * PITCH;
+
+  const draggingIdRef = useRef<string | null>(null);
+
+  // Real-time Up/Down Drag Reordering on the ≡ Grip Handle
+  const handleGripPointerDown = (e: React.PointerEvent, n: Note) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const targetEl = e.currentTarget as HTMLElement;
+    try {
+      targetEl.setPointerCapture(e.pointerId);
+    } catch {}
+
+    const currentIdx = dockNotes.findIndex(x => x.id === n.id);
+    if (currentIdx === -1) return;
+
+    setDraggingId(n.id);
+    draggingIdRef.current = n.id;
+    const baseTop = slot(currentIdx);
+    setDragTop(baseTop);
+
+    const s = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--s')) || 0.40;
+    const startY = e.clientY;
+    const maxTop = slot(dockNotes.length - 1);
+    let lastIdx = currentIdx;
+    let currentList = [...dockNotes];
+
+    document.body.style.userSelect = 'none';
+
+    const onPointerMove = (ev: PointerEvent) => {
+      ev.preventDefault();
+      const delta = (ev.clientY - startY) / s;
+      const newTop = Math.min(maxTop + 30, Math.max(TOP0 - 30, baseTop + delta));
+      setDragTop(newTop);
+
+      const targetIdx = Math.max(0, Math.min(dockNotes.length - 1, Math.round((newTop - TOP0) / PITCH)));
+      if (targetIdx !== lastIdx) {
+        const item = currentList[lastIdx];
+        currentList.splice(lastIdx, 1);
+        currentList.splice(targetIdx, 0, item);
+        lastIdx = targetIdx;
+        const newOrder = currentList.map(x => x.id);
+        setCustomOrder(newOrder);
+        localStorage.setItem('sidenote_dock_order', JSON.stringify(newOrder));
+      }
+    };
+
+    const onPointerUp = (ev: PointerEvent) => {
+      try {
+        targetEl.releasePointerCapture(ev.pointerId);
+      } catch {}
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+      document.body.style.userSelect = '';
+      setDraggingId(null);
+      draggingIdRef.current = null;
+      setDragTop(null);
+    };
+
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+  };
 
   const handleCreateNew = async () => {
     if (dockNotes.length >= 4) {
@@ -572,21 +661,23 @@ function EdgeDock() {
         <div id="tabs">
           {dockNotes.map((n, idx) => {
             const isOpen = openNoteId === n.id;
+            const isDragging = draggingId === n.id;
             const col = FIGMA_COLORS[idx % 4];
 
             return (
               <div
                 key={n.id}
-                className={`tab ${isOpen ? 'open' : ''}`}
+                className={`tab ${isOpen ? 'open' : ''} ${isDragging ? 'dragging' : ''}`}
                 style={{
-                  top: `${slot(idx)}px`,
+                  top: isDragging && dragTop !== null ? `${dragTop}px` : `${slot(idx)}px`,
                   ['--d' as any]: `${350 + idx * 90}ms`,
+                  zIndex: isDragging ? 40 : (isOpen ? 20 : 1),
                 }}
                 onPointerEnter={() => {
-                  void expandDock(n.id);
+                  if (!draggingId) void expandDock(n.id);
                 }}
                 onClick={() => {
-                  void expandDock(n.id);
+                  if (!draggingId) void expandDock(n.id);
                 }}
               >
                 <svg width="199" height="199">
@@ -611,7 +702,8 @@ function EdgeDock() {
                     <div className="card-top-bar">
                       <div
                         className="grip"
-                        title="Double-click to float sticky note on desktop"
+                        title="Drag up/down to reorder note (Double-click to float)"
+                        onPointerDown={e => handleGripPointerDown(e, n)}
                         onDoubleClick={async e => {
                           e.stopPropagation();
                           await openFloatingNote(n);
