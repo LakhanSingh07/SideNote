@@ -663,8 +663,9 @@ function EdgeDock() {
       // Uncropped dock height with proper safe margins for bottom curves & folder icon
       const targetHeight = Math.max(420, Math.round(screenHeight * 0.58));
       const s = Math.min(0.68, (targetHeight - 24) / 1340);
-      // widthFactor adjusts how wide the expanded card area is (user controllable)
-      const openWidth = Math.round(760 * s * widthFactor);
+      // Ensure openWidth is always wide enough for full card (474 * s) + shadow (44 * s) + safe margins
+      const minOpenW = Math.round(580 * s);
+      const openWidth = Math.max(minOpenW, Math.round(760 * s * widthFactor));
       const targetWidth = isOpen ? Math.max(openWidth, Math.round(280 * s)) : Math.round(280 * s);
       const targetX = (mon.position.x / scale) + screenWidth - targetWidth;
       const targetY = (mon.position.y / scale) + Math.round((screenHeight - targetHeight) / 2);
@@ -760,7 +761,7 @@ function EdgeDock() {
 
   const draggingIdRef = useRef<string | null>(null);
 
-  // Real-time Up/Down Drag Reordering on Grip & Horizontal Pull-Out onto Desktop
+  // Real-time Up/Down Drag Reordering on Grip & Instant Tear-Out onto Full Desktop
   const handleGripPointerDown = (e: React.PointerEvent, n: Note) => {
     if (e.button !== 0) return;
     e.preventDefault();
@@ -778,6 +779,7 @@ function EdgeDock() {
     draggingIdRef.current = n.id;
     const baseTop = slot(currentIdx);
     setDragTop(baseTop);
+    setDragLeft(0);
 
     const s = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--s')) || 0.40;
     const startX = e.clientX;
@@ -790,7 +792,6 @@ function EdgeDock() {
     document.body.style.userSelect = 'none';
 
     let finished = false;
-    let dragDirection: 'undecided' | 'reorder' | 'pullout' = 'undecided';
 
     const cleanup = () => {
       try {
@@ -828,42 +829,34 @@ function EdgeDock() {
       const absX = Math.abs(deltaX);
       const absY = Math.abs(deltaY);
 
-      // Lock drag intent: reorder vs pullout
-      if (dragDirection === 'undecided' && dist > 14) {
-        if (deltaX < -35 && absX > absY * 0.9) {
-          dragDirection = 'pullout';
-        } else if (absY > 10) {
-          dragDirection = 'reorder';
+      // Pulling leftwards towards desktop triggers instant seamless tear-off!
+      // This prevents ANY cropped frame since the note becomes a real desktop floating window!
+      if (deltaX < -32 && absX > absY * 0.7) {
+        const mon = (window as any).__TAURI_INTERNALS__ ? null : null;
+        let screenDropX = ev.screenX;
+        let screenDropY = ev.screenY;
+        if (!screenDropX || !screenDropY) {
+          screenDropX = window.screenX + ev.clientX;
+          screenDropY = window.screenY + ev.clientY;
         }
+        void finishTearOff(screenDropX, screenDropY);
+        return;
       }
 
-      const isPullingOut = dragDirection === 'pullout' || (deltaX < -70 && absX > absY * 0.7);
+      // Vertical Up/Down Slot Reordering inside the edge dock
+      setDragLeft(0);
+      const newTop = Math.min(maxTop, Math.max(TOP0 - 30, baseTop + deltaY));
+      setDragTop(newTop);
 
-      if (isPullingOut) {
-        setIsTearOff(true);
-        // Follow cursor smoothly to the left
-        const horizontalShift = Math.max(-320, deltaX);
-        setDragLeft(horizontalShift);
-        const newTop = Math.min(maxTop, Math.max(TOP0 - 30, baseTop + deltaY));
-        setDragTop(newTop);
-        // DO NOT trigger tear-off mid-drag! Wait until the user releases the mouse (onPointerUp)!
-      } else {
-        // Pure slot reordering in the edge dock
-        setIsTearOff(false);
-        setDragLeft(0);
-        const newTop = Math.min(maxTop, Math.max(TOP0 - 30, baseTop + deltaY));
-        setDragTop(newTop);
-
-        const targetIdx = Math.max(0, Math.min(dockNotes.length - 1, Math.round((newTop - TOP0) / PITCH)));
-        if (targetIdx !== lastIdx) {
-          const item = currentList[lastIdx];
-          currentList.splice(lastIdx, 1);
-          currentList.splice(targetIdx, 0, item);
-          lastIdx = targetIdx;
-          const newOrder = currentList.map(x => x.id);
-          setCustomOrder(newOrder);
-          localStorage.setItem('sidenote_dock_order', JSON.stringify(newOrder));
-        }
+      const targetIdx = Math.max(0, Math.min(dockNotes.length - 1, Math.round((newTop - TOP0) / PITCH)));
+      if (targetIdx !== lastIdx) {
+        const item = currentList[lastIdx];
+        currentList.splice(lastIdx, 1);
+        currentList.splice(targetIdx, 0, item);
+        lastIdx = targetIdx;
+        const newOrder = currentList.map(x => x.id);
+        setCustomOrder(newOrder);
+        localStorage.setItem('sidenote_dock_order', JSON.stringify(newOrder));
       }
     };
 
@@ -885,7 +878,7 @@ function EdgeDock() {
       }
 
       // Check if user pulled out past the threshold and released anywhere on the desktop
-      const shouldTearOff = (dragDirection === 'pullout' && deltaX < -50) || (deltaX < -70 && absX > absY * 0.6) || ev.clientX < -10;
+      const shouldTearOff = (deltaX < -30) || (deltaX < -50 && absX > absY * 0.6) || ev.clientX < -10;
 
       if (shouldTearOff) {
         let dropX: number | undefined;
