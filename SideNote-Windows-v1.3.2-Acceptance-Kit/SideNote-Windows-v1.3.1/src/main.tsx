@@ -818,10 +818,23 @@ function EdgeDock() {
     document.body.style.userSelect = 'none';
 
     // Temporarily expand dock window to cover the screen so dragging has 100% full-screen canvas with zero cropping
+    let restoreTopOffset = 9;
     if (native) {
       try {
         const mon = await currentMonitor();
         if (mon) {
+          const scale = mon.scaleFactor || 1;
+          const screenHeight = mon.size.height / scale;
+          const targetHeight = Math.max(420, Math.round(screenHeight * 0.58));
+          const targetY = Math.round((screenHeight - targetHeight) / 2);
+          const topOffset = Math.max(4, Math.round((screenHeight * 0.58 - 1340 * s) / 2));
+          restoreTopOffset = topOffset;
+
+          // Compensate frame top so dock remains 100% stationary on monitor when window expands to y=0
+          if (frameRef.current) {
+            frameRef.current.style.top = `${targetY + topOffset}px`;
+          }
+
           await invoke('set_window_bounds_atomic', {
             x: mon.position.x,
             y: mon.position.y,
@@ -844,6 +857,9 @@ function EdgeDock() {
       window.removeEventListener('pointerup', onPointerUp);
       window.removeEventListener('pointercancel', onCancel);
       document.body.style.userSelect = '';
+      if (frameRef.current) {
+        frameRef.current.style.top = `${restoreTopOffset}px`;
+      }
     };
 
     const onPointerMove = (ev: PointerEvent) => {
