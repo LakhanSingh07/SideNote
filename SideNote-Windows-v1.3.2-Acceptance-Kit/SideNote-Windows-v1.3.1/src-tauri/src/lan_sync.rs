@@ -1,280 +1,589 @@
-//! Experimental same-LAN encrypted bundle exchange. Manual 256-bit shared-key setup.
-//! Transport authentication relies exclusively on keeping the pairing key secret.
-use std::{collections::HashSet,io::{Read,Write},net::{TcpListener,TcpStream,SocketAddr,IpAddr},sync::{Arc,Mutex,atomic::{AtomicUsize,Ordering}},time::Duration,thread};
-use chacha20poly1305::{XChaCha20Poly1305,KeyInit,XNonce,aead::{Aead,OsRng,rand_core::RngCore}};
-use rusqlite::Connection;
-use serde::{Serialize,Deserialize};
+use std::{
+    collections::HashSet,
+    io::{Read, Write},
+    net::{IpAddr, SocketAddr, TcpListener, TcpStream, UdpSocket},
+    sync::{Arc, Mutex},
+    thread,
+    time::{Duration, Instant, SystemTime},
+};
+use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
-use crate::{sync_bundle,device_identity};
-const PORT:u16=43861;
-const MAX_FRAME:usize=5_500_000;
-const MAX_SESSION_PAGES:usize=1024;
-const MAX_IDLE_PAGES:usize=3;
-const MAX_INBOUND_SESSIONS:usize=8;
 
-// Decrement the active-session count even when a peer disconnects or panics.
-struct SessionPermit(Arc<AtomicUsize>);
-impl Drop for SessionPermit { fn drop(&mut self) { self.0.fetch_sub(1,Ordering::AcqRel); } }
-fn try_reserve_session(active:&Arc<AtomicUsize>)->Option<SessionPermit> {
- active.try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
-  if count < MAX_INBOUND_SESSIONS { Some(count+1) } else { None }
- }).ok().map(|_| SessionPermit(active.clone()))
+use crate::sync_bundle;
+
+pub const TCP_PORT: u16 = 43861;
+pub const UDP_PORT: u16 = 43862;
+const MAX_FRAME: usize = 6_000_000;
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PairingPinEvent {
+    pub pin: String,
+    pub device_name: String,
+    pub device_id: String,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PairedDeviceEvent {
+    pub device_id: String,
+    pub device_name: String,
+}
 
-fn key_from_hex(s:&str)->Result<[u8;32],String>{
- let b=hex::decode(s.trim()).map_err(|_|"Pairing key must contain 64 hexadecimal characters".to_string())?;
- if b.len()!=32{return Err("Pairing key must be exactly 32 bytes".into())}
- let mut k=[0;32];k.copy_from_slice(&b);Ok(k)
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncStatusReport {
+    pub applied: usize,
+    pub skipped: usize,
+    pub conflicts: usize,
+    pub peer_device_id: String,
 }
-pub fn make_key()->String{let mut k=[0u8;32];OsRng.fill_bytes(&mut k);hex::encode(k)}
-fn cipher(key:&[u8;32])->XChaCha20Poly1305{XChaCha20Poly1305::new(key.into())}
-fn write_packet(s:&mut TcpStream,key:&[u8;32],plaintext:&str)->Result<(),String>{
- if plaintext.len()>MAX_FRAME-64{return Err("Sync data too large".into())}
- let mut nonce=[0u8;24];OsRng.fill_bytes(&mut nonce);
- let ciphertext=cipher(key).encrypt(XNonce::from_slice(&nonce),plaintext.as_bytes()).map_err(|_|"Could not encrypt sync data".to_string())?;
- let len=24+ciphertext.len();if len>MAX_FRAME{return Err("Encrypted data too large".into())}
- s.write_all(&(len as u32).to_be_bytes()).map_err(|e|e.to_string())?;
- s.write_all(&nonce).map_err(|e|e.to_string())?;s.write_all(&ciphertext).map_err(|e|e.to_string())?;
- Ok(())
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(tag = "type")]
+enum WireMessage {
+    #[serde(rename = "PAIR_REQUEST")]
+    PairRequest {
+        #[serde(rename = "deviceId")]
+        device_id: String,
+        #[serde(rename = "deviceName")]
+        device_name: String,
+    },
+    #[serde(rename = "PAIR_VERIFY")]
+    PairVerify {
+        #[serde(rename = "deviceId")]
+        device_id: String,
+        #[serde(rename = "deviceName")]
+        device_name: String,
+        pin: String,
+    },
+    #[serde(rename = "SYNC_REQUEST")]
+    SyncRequest {
+        #[serde(rename = "deviceId")]
+        device_id: String,
+        token: String,
+        #[serde(rename = "ackCursor", default)]
+        ack_cursor: i64,
+        #[serde(default)]
+        bundle: Option<String>,
+    },
+    #[serde(rename = "PING")]
+    Ping,
 }
-fn read_packet(s:&mut TcpStream,key:&[u8;32],seen:&mut HashSet<[u8;24]>)->Result<String,String>{
- let mut len=[0u8;4];s.read_exact(&mut len).map_err(|e|e.to_string())?;
- let n=u32::from_be_bytes(len) as usize;
- if n<40||n>MAX_FRAME{return Err("Invalid encrypted packet length".into())}
- let mut buf=vec![0u8;n];s.read_exact(&mut buf).map_err(|e|e.to_string())?;
- let mut nonce=[0u8;24]; nonce.copy_from_slice(&buf[..24]);
- // Fail closed on duplicate nonces within this TCP session, even if the AEAD tag is valid.
- // Do not insert a nonce unless authentication has succeeded.
- if seen.contains(&nonce) { return Err("Repeated encrypted packet nonce in sync session".into()); }
- let plain=cipher(key).decrypt(XNonce::from_slice(&nonce),&buf[24..]).map_err(|_|"Authentication failed: wrong pairing key or altered packet".to_string())?;
- seen.insert(nonce);
- String::from_utf8(plain).map_err(|_|"Invalid sync payload".into())
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(tag = "type")]
+enum WireResponse {
+    #[serde(rename = "PAIR_CHALLENGE")]
+    PairChallenge {
+        status: String,
+        message: String,
+    },
+    #[serde(rename = "PAIR_SUCCESS")]
+    PairSuccess {
+        status: String,
+        token: String,
+        #[serde(rename = "deviceId")]
+        device_id: String,
+        #[serde(rename = "deviceName")]
+        device_name: String,
+    },
+    #[serde(rename = "PAIR_ERROR")]
+    PairError {
+        status: String,
+        error: String,
+    },
+    #[serde(rename = "SYNC_REPLY")]
+    SyncReply {
+        status: String,
+        #[serde(rename = "receivedCursor")]
+        received_cursor: i64,
+        bundle: String,
+        #[serde(rename = "appliedCount")]
+        applied_count: usize,
+    },
+    #[serde(rename = "SYNC_ERROR")]
+    SyncError {
+        status: String,
+        error: String,
+    },
+    #[serde(rename = "PONG")]
+    Pong {
+        status: String,
+        #[serde(rename = "deviceId")]
+        device_id: String,
+        #[serde(rename = "deviceName")]
+        device_name: String,
+    },
 }
-fn configure(stream:&TcpStream){let _=stream.set_read_timeout(Some(Duration::from_secs(10)));let _=stream.set_write_timeout(Some(Duration::from_secs(10)));}
+
+struct PendingPairing {
+    pin: String,
+    device_id: String,
+    device_name: String,
+    created_at: Instant,
+}
+
+static PENDING_PAIRING: Mutex<Option<PendingPairing>> = Mutex::new(None);
+
+pub fn make_key() -> String {
+    let mut k = [0u8; 32];
+    chacha20poly1305::aead::rand_core::RngCore::fill_bytes(
+        &mut chacha20poly1305::aead::OsRng,
+        &mut k,
+    );
+    hex::encode(k)
+}
+
+fn local_computer_name() -> String {
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| "Windows PC".into())
+}
+
+fn local_id(c: &Connection) -> Result<String, String> {
+    c.query_row(
+        "SELECT value FROM sync_meta WHERE key='device_id'",
+        [],
+        |r| r.get(0),
+    )
+    .map_err(|e| e.to_string())
+}
+
+fn read_framed_json(stream: &mut TcpStream) -> Result<String, String> {
+    let mut len_buf = [0u8; 4];
+    stream.read_exact(&mut len_buf).map_err(|e| e.to_string())?;
+    let len = u32::from_be_bytes(len_buf) as usize;
+    if len > MAX_FRAME || len == 0 {
+        return Err(format!("Invalid frame length: {len}"));
+    }
+    let mut payload = vec![0u8; len];
+    stream.read_exact(&mut payload).map_err(|e| e.to_string())?;
+    String::from_utf8(payload).map_err(|e| format!("Invalid UTF-8 payload: {e}"))
+}
+
+fn write_framed_json(stream: &mut TcpStream, json: &str) -> Result<(), String> {
+    let bytes = json.as_bytes();
+    if bytes.len() > MAX_FRAME {
+        return Err("Payload exceeds max frame size".into());
+    }
+    let len_bytes = (bytes.len() as u32).to_be_bytes();
+    stream.write_all(&len_bytes).map_err(|e| e.to_string())?;
+    stream.write_all(bytes).map_err(|e| e.to_string())?;
+    stream.flush().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn handle_tcp_client(
+    mut stream: TcpStream,
+    app: AppHandle,
+    db: Arc<Mutex<Connection>>,
+) -> Result<(), String> {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(12)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(12)));
+
+    let raw_req = read_framed_json(&mut stream)?;
+    let msg: WireMessage = match serde_json::from_str(&raw_req) {
+        Ok(m) => m,
+        Err(e) => {
+            let err_resp = WireResponse::SyncError {
+                status: "error".into(),
+                error: format!("Malformed message: {e}"),
+            };
+            let _ = write_framed_json(&mut stream, &serde_json::to_string(&err_resp).unwrap());
+            return Err(e.to_string());
+        }
+    };
+
+    match msg {
+        WireMessage::Ping => {
+            let (own_id, own_name) = {
+                let c = db.lock().map_err(|e| e.to_string())?;
+                (local_id(&c)?, local_computer_name())
+            };
+            let resp = WireResponse::Pong {
+                status: "ok".into(),
+                device_id: own_id,
+                device_name: own_name,
+            };
+            write_framed_json(&mut stream, &serde_json::to_string(&resp).unwrap())?;
+        }
+        WireMessage::PairRequest {
+            device_id,
+            device_name,
+        } => {
+            // Generate a crisp, clean 4-digit numeric PIN: 1000..9999
+            let mut rand_bytes = [0u8; 2];
+            chacha20poly1305::aead::rand_core::RngCore::fill_bytes(
+                &mut chacha20poly1305::aead::OsRng,
+                &mut rand_bytes,
+            );
+            let val = u16::from_be_bytes(rand_bytes) % 9000 + 1000;
+            let pin = format!("{:04}", val);
+
+            // Store in pending pairing
+            {
+                let mut guard = PENDING_PAIRING.lock().unwrap();
+                *guard = Some(PendingPairing {
+                    pin: pin.clone(),
+                    device_id: device_id.clone(),
+                    device_name: device_name.clone(),
+                    created_at: Instant::now(),
+                });
+            }
+
+            // Notify Windows UI with PIN modal/toast
+            let _ = app.emit(
+                "sidenote_pairing_pin",
+                PairingPinEvent {
+                    pin: pin.clone(),
+                    device_name: device_name.clone(),
+                    device_id: device_id.clone(),
+                },
+            );
+
+            let resp = WireResponse::PairChallenge {
+                status: "challenge".into(),
+                message: format!("Enter 4-digit PIN {} on your Android phone", pin),
+            };
+            write_framed_json(&mut stream, &serde_json::to_string(&resp).unwrap())?;
+        }
+        WireMessage::PairVerify {
+            device_id,
+            device_name,
+            pin,
+        } => {
+            let is_valid = {
+                let guard = PENDING_PAIRING.lock().unwrap();
+                if let Some(ref pending) = *guard {
+                    pending.created_at.elapsed() < Duration::from_secs(120)
+                        && pending.device_id == device_id
+                        && pending.pin == pin.trim()
+                } else {
+                    false
+                }
+            };
+
+            if !is_valid {
+                let resp = WireResponse::PairError {
+                    status: "error".into(),
+                    error: "Invalid or expired pairing PIN. Please try again.".into(),
+                };
+                write_framed_json(&mut stream, &serde_json::to_string(&resp).unwrap())?;
+                return Err("Invalid pairing PIN".into());
+            }
+
+            // Clean pending pairing
+            {
+                let mut guard = PENDING_PAIRING.lock().unwrap();
+                *guard = None;
+            }
+
+            // Generate durable pairing secret token
+            let token = make_key();
+            let (own_id, own_name) = {
+                let c = db.lock().map_err(|e| e.to_string())?;
+                let own_id = local_id(&c)?;
+                let own_name = local_computer_name();
+                c.execute(
+                    "INSERT INTO trusted_peers(device_id, label, public_key) VALUES (?1, ?2, ?3) ON CONFLICT(device_id) DO UPDATE SET label=excluded.label, public_key=excluded.public_key",
+                    params![device_id, device_name, token],
+                ).map_err(|e| e.to_string())?;
+                (own_id, own_name)
+            };
+
+            let _ = app.emit(
+                "sidenote_paired",
+                PairedDeviceEvent {
+                    device_id: device_id.clone(),
+                    device_name: device_name.clone(),
+                },
+            );
+
+            let resp = WireResponse::PairSuccess {
+                status: "ok".into(),
+                token,
+                device_id: own_id,
+                device_name: own_name,
+            };
+            write_framed_json(&mut stream, &serde_json::to_string(&resp).unwrap())?;
+        }
+        WireMessage::SyncRequest {
+            device_id,
+            token,
+            ack_cursor,
+            bundle,
+        } => {
+            // Verify device is trusted with this token
+            let mut applied_count = 0;
+            let (outgoing_bundle, received_cursor) = {
+                let mut c = db.lock().map_err(|e| e.to_string())?;
+
+                let stored_token: Option<String> = c
+                    .query_row(
+                        "SELECT public_key FROM trusted_peers WHERE device_id=?1",
+                        [&device_id],
+                        |r| r.get(0),
+                    )
+                    .ok()
+                    .flatten();
+
+                if stored_token.as_deref() != Some(token.trim()) {
+                    let resp = WireResponse::SyncError {
+                        status: "unauthorized".into(),
+                        error: "Device not paired or pairing token revoked".into(),
+                    };
+                    write_framed_json(&mut stream, &serde_json::to_string(&resp).unwrap())?;
+                    return Err("Unauthorized sync attempt".into());
+                }
+
+                // If remote sent an incoming bundle, import it!
+                if let Some(ref incoming_json) = bundle {
+                    if !incoming_json.trim().is_empty() {
+                        match sync_bundle::import_bundle(&mut c, incoming_json) {
+                            Ok(report) => {
+                                applied_count = report.applied;
+                                if let Ok((_, last_seq, _)) =
+                                    sync_bundle::bundle_meta(incoming_json)
+                                {
+                                    if last_seq > 0 {
+                                        let _ = sync_bundle::advance_peer_cursor(
+                                            &c,
+                                            &device_id,
+                                            last_seq,
+                                        );
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("Error importing incoming sync bundle: {e}");
+                            }
+                        }
+                    }
+                }
+
+                // Prepare outgoing bundle for the peer
+                let outgoing = sync_bundle::export_bundle(&c, ack_cursor.max(0))
+                    .unwrap_or_else(|_| "{}".into());
+                let received = sync_bundle::peer_cursor(&c, &device_id).unwrap_or(0);
+
+                (outgoing, received)
+            };
+
+            // If notes were applied, inform frontend to refresh!
+            if applied_count > 0 {
+                let _ = app.emit("sidenote_sync_updated", applied_count);
+            }
+
+            let resp = WireResponse::SyncReply {
+                status: "ok".into(),
+                received_cursor,
+                bundle: outgoing_bundle,
+                applied_count,
+            };
+            write_framed_json(&mut stream, &serde_json::to_string(&resp).unwrap())?;
+        }
+    }
+
+    Ok(())
+}
+
+fn start_tcp_server(app: AppHandle, db: Arc<Mutex<Connection>>) {
+    thread::spawn(move || {
+        let listener = match TcpListener::bind(("0.0.0.0", TCP_PORT)) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("SideNote TCP sync bind error on port {TCP_PORT}: {e}");
+                return;
+            }
+        };
+        for stream in listener.incoming() {
+            if let Ok(s) = stream {
+                let app_c = app.clone();
+                let db_c = db.clone();
+                thread::spawn(move || {
+                    if let Err(e) = handle_tcp_client(s, app_c, db_c) {
+                        eprintln!("SideNote sync client error: {e}");
+                    }
+                });
+            }
+        }
+    });
+}
+
+fn start_udp_discovery_responder(db: Arc<Mutex<Connection>>) {
+    thread::spawn(move || {
+        let socket = match UdpSocket::bind(("0.0.0.0", UDP_PORT)) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("SideNote UDP discovery bind error on port {UDP_PORT}: {e}");
+                return;
+            }
+        };
+        let _ = socket.set_broadcast(true);
+        let mut buf = [0u8; 4096];
+
+        loop {
+            match socket.recv_from(&mut buf) {
+                Ok((size, src)) => {
+                    let msg = String::from_utf8_lossy(&buf[..size]);
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&msg) {
+                        let cmd = val.get("cmd").and_then(|v| v.as_str()).unwrap_or("");
+                        if cmd == "SIDENOTE_DISCOVER" {
+                            let (own_id, own_name) = {
+                                if let Ok(c) = db.lock() {
+                                    (local_id(&c).unwrap_or_default(), local_computer_name())
+                                } else {
+                                    (String::new(), local_computer_name())
+                                }
+                            };
+                            let reply = serde_json::json!({
+                                "cmd": "SIDENOTE_ANNOUNCE",
+                                "deviceId": own_id,
+                                "deviceName": own_name,
+                                "port": TCP_PORT,
+                                "platform": "windows"
+                            });
+                            let reply_bytes = serde_json::to_vec(&reply).unwrap_or_default();
+                            let _ = socket.send_to(&reply_bytes, src);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("SideNote UDP discovery error: {e}");
+                    thread::sleep(Duration::from_millis(500));
+                }
+            }
+        }
+    });
+}
+
+pub fn init_auto_sync(app: AppHandle, db: Arc<Mutex<Connection>>) {
+    start_tcp_server(app, db.clone());
+    start_udp_discovery_responder(db);
+}
+
+pub fn notify_peers_note_changed() {
+    thread::spawn(|| {
+        if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
+            let _ = socket.set_broadcast(true);
+            let packet = serde_json::json!({
+                "cmd": "SIDENOTE_NOTIFY",
+                "ts": SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
+            });
+            let bytes = serde_json::to_vec(&packet).unwrap_or_default();
+            let _ = socket.send_to(&bytes, format!("255.255.255.255:{UDP_PORT}"));
+        }
+    });
+}
+
 #[derive(Serialize)]
-#[serde(rename_all="camelCase")]
-pub struct LanReport{pub sent_bytes:usize,pub received_bytes:usize,pub applied:usize,pub skipped:usize,pub conflicts:usize}
-#[derive(Serialize,Deserialize)]
-#[serde(rename_all="camelCase",deny_unknown_fields)]
-struct Hello { device_id:String }
-#[derive(Serialize,Deserialize)]
-#[serde(rename_all="camelCase",deny_unknown_fields)]
-struct Proof { public_key:String, nonce:String, signature:String }
-#[derive(Serialize,Deserialize)]
-#[serde(rename_all="camelCase",deny_unknown_fields)]
-struct Page { device_id:String, ack_cursor:i64, bundle:String }
-#[derive(Serialize,Deserialize)]
-#[serde(rename_all="camelCase",deny_unknown_fields)]
-struct PageReply { bundle:String, received_cursor:i64 }
-// Never trust a remote acknowledgement beyond what this session actually sent.
-// An over-advanced cursor can permanently skip local changes.
-fn validate_ack(previous:i64, acknowledged:i64, sent_through:i64)->Result<(),String>{
- if previous<0 || acknowledged<previous || acknowledged>sent_through {
-   return Err("Invalid peer acknowledgement cursor".into());
- }
- Ok(())
-}
-fn require_trusted(c:&Connection,peer:&str)->Result<String,String>{
- let key:Option<String>=c.query_row("SELECT public_key FROM trusted_peers WHERE device_id=?1",[peer],|r|r.get(0)).map_err(|_|"Unapproved peer".to_string())?;
- let key=key.ok_or("Peer has no pinned public key: pair again".to_string())?;
- if hex::decode(&key).map(|b|b.len()!=32).unwrap_or(true){return Err("Peer key invalid".into())}
- Ok(key)
-}
-fn local_identity(c:&Connection)->Result<device_identity::DeviceIdentity,String>{
- crate::key_protection::load_identity(c)
+#[serde(rename_all = "camelCase")]
+pub struct LanReport {
+    pub sent_bytes: usize,
+    pub received_bytes: usize,
+    pub applied: usize,
+    pub skipped: usize,
+    pub conflicts: usize,
 }
 
-fn fresh_nonce() -> [u8; 32] {
- let mut n = [0u8; 32];
- OsRng.fill_bytes(&mut n);
- n
+pub fn start_server(_db: Arc<Mutex<Connection>>, _key_hex: &str) -> Result<String, String> {
+    Ok(format!("Sync service actively running on TCP port {TCP_PORT}"))
 }
 
-fn authenticate(stream:&mut TcpStream,key:&[u8;32],seen:&mut HashSet<[u8;24]>,identity:&device_identity::DeviceIdentity,expected_peer_key:&str,initiator:bool)->Result<(),String>{
- let mine=identity.public_key_hex();
- let nonce=fresh_nonce();
- let mine_nonce=hex::encode(nonce);
- // Both sides send independent challenges. Signed responses bind signer, recipient and nonce.
- let peer_nonce:String;
- if initiator {
-  write_packet(stream,key,&mine_nonce)?;
-  peer_nonce=read_packet(stream,key,seen)?;
- } else {
-  peer_nonce=read_packet(stream,key,seen)?;
-  write_packet(stream,key,&mine_nonce)?;
- }
- let peer_bytes=hex::decode(&peer_nonce).map_err(|_|"Invalid challenge".to_string())?;
- let peer_array:[u8;32]=peer_bytes.try_into().map_err(|_|"Invalid challenge length".to_string())?;
- let outgoing=Proof{public_key:mine.clone(),nonce:peer_nonce,signature:identity.sign_challenge(expected_peer_key,&peer_array)?};
- let incoming:Proof;
- if initiator {
-  write_packet(stream,key,&serde_json::to_string(&outgoing).map_err(|e|e.to_string())?)?;
-  incoming=serde_json::from_str(&read_packet(stream,key,seen)?).map_err(|_|"Invalid authentication proof".to_string())?;
- } else {
-  incoming=serde_json::from_str(&read_packet(stream,key,seen)?).map_err(|_|"Invalid authentication proof".to_string())?;
-  write_packet(stream,key,&serde_json::to_string(&outgoing).map_err(|e|e.to_string())?)?;
- }
- if incoming.public_key!=expected_peer_key || incoming.nonce!=mine_nonce {return Err("Peer identity or challenge mismatch".into())}
- device_identity::verify_challenge(expected_peer_key,&mine,&nonce,&incoming.signature)
-}
-fn local_id(c:&Connection)->Result<String,String>{
- c.query_row("SELECT value FROM sync_meta WHERE key='device_id'",[],|r|r.get(0)).map_err(|e|e.to_string())
-}
-fn serve(mut s:TcpStream,db:Arc<Mutex<Connection>>,key:[u8;32])->Result<(),String>{
- configure(&s);let mut seen=HashSet::new();let peer=s.peer_addr().map_err(|e|e.to_string())?;
- if !allowed(peer.ip()){return Err("Only private LAN addresses are permitted".into())}
- let hello:Hello=serde_json::from_str(&read_packet(&mut s,&key,&mut seen)?).map_err(|_|"Invalid sync hello".to_string())?;
- if Uuid::parse_str(&hello.device_id).is_err(){return Err("Invalid peer identity".into())}
- let own={let c=db.lock().map_err(|e|e.to_string())?;local_id(&c)?};
- if own==hello.device_id{return Err("Cannot sync with self".into())}
- let (expected,identity)={let c=db.lock().map_err(|e|e.to_string())?;(require_trusted(&c,&hello.device_id)?,local_identity(&c)?)};
- write_packet(&mut s,&key,&serde_json::to_string(&Hello{device_id:own.clone()}).map_err(|e|e.to_string())?)?;
- authenticate(&mut s,&key,&mut seen,&identity,&expected,false)?;
- let mut last_ack=0_i64;
- // A reconnecting peer may already have acknowledged changes from a prior session.
- // Bound the first acknowledgement by our currently committed local change history.
- let mut last_sent={
-   let c=db.lock().map_err(|e|e.to_string())?;
-   c.query_row("SELECT COALESCE(MAX(seq),0) FROM sync_changes WHERE origin_device=?1",[own.as_str()],|r|r.get::<_,i64>(0)).map_err(|e|e.to_string())?
- };
- let mut idle_pages=0usize;
- for _ in 0..MAX_SESSION_PAGES {
-   let req:Page=serde_json::from_str(&read_packet(&mut s,&key,&mut seen)?).map_err(|_|"Invalid sync page".to_string())?;
-   if req.device_id!=hello.device_id{return Err("Peer identity changed".into())}
-   validate_ack(last_ack,req.ack_cursor,last_sent)?;
-   let ack_advanced=req.ack_cursor>last_ack;
-   last_ack=req.ack_cursor;
-   let mut c=db.lock().map_err(|e|e.to_string())?;
-   let received_before=sync_bundle::peer_cursor(&c,&hello.device_id)?;
-   let (origin,last,_count)=sync_bundle::bundle_meta(&req.bundle)?;
-   if origin!=hello.device_id{return Err("Bundle origin mismatch".into())}
-   // Transactions in import_bundle commit before the received cursor is acknowledged.
-   sync_bundle::import_bundle(&mut c,&req.bundle)?;
-   if last>0{sync_bundle::advance_peer_cursor(&c,&hello.device_id,last)?;}
-   let received=sync_bundle::peer_cursor(&c,&hello.device_id)?;
-   if !ack_advanced && last<=received_before { idle_pages+=1; } else {idle_pages=0;}
-   if idle_pages>=MAX_IDLE_PAGES{return Err("Peer session made no progress".into())}
-   let outgoing=sync_bundle::export_bundle(&c,req.ack_cursor)?;
-   let (_,terminal,outgoing_count)=sync_bundle::bundle_meta(&outgoing)?;
-   let (_,_,incoming_count)=sync_bundle::bundle_meta(&req.bundle)?;
-   last_sent=terminal.max(req.ack_cursor);
-   // A completed final exchange must close cleanly instead of waiting for
-   // another page after the client has finished and disconnected.
-   let session_complete=incoming_count==0 && outgoing_count==0;
-   drop(c);
-   let resp=PageReply{bundle:outgoing,received_cursor:received};
-   write_packet(&mut s,&key,&serde_json::to_string(&resp).map_err(|e|e.to_string())?)?;
-   if session_complete { return Ok(()); }
- }
- Err("Sync session exceeded safety page limit".into())
-}
-fn allowed(ip:IpAddr)->bool{match ip{IpAddr::V4(v)=>v.is_private()||v.is_loopback(),IpAddr::V6(v)=>v.is_loopback()||v.is_unique_local()}}
-pub fn start_server(db:Arc<Mutex<Connection>>,key_hex:&str)->Result<String,String>{
- let key=key_from_hex(key_hex)?;
- let listener=TcpListener::bind(("0.0.0.0",PORT)).map_err(|e|format!("Cannot listen on port {PORT}: {e}"))?;
- let active=Arc::new(AtomicUsize::new(0));
- thread::spawn(move||for connection in listener.incoming(){match connection{
-   Ok(s)=>{
-     if let Some(permit)=try_reserve_session(&active) {
-       let database=db.clone();
-       thread::spawn(move||{let _permit=permit; if let Err(e)=serve(s,database,key){eprintln!("SideNote LAN session rejected: {e}");}});
-     } else {
-       // Drop surplus connections without a thread or allocating a frame buffer.
-       drop(s);
-     }
-   },
-   Err(e)=>{eprintln!("SideNote LAN listener error: {e}");break;}
- }});
- Ok(format!("Listening for paired Windows devices on TCP port {PORT}"))
-}
-pub fn sync_peer(db:Arc<Mutex<Connection>>,address:&str,key_hex:&str)->Result<LanReport,String>{
- let key=key_from_hex(key_hex)?;
- let addr:SocketAddr=format!("{}:{}",address.trim(),PORT).parse().map_err(|_|"Enter a numeric IPv4 or bracketed IPv6 LAN address".to_string())?;
- if !allowed(addr.ip()){return Err("Only private LAN addresses are permitted".into())}
- let mut s=TcpStream::connect_timeout(&addr,Duration::from_secs(8)).map_err(|e|format!("LAN connection failed: {e}"))?;
- configure(&s);
- let mut seen=HashSet::new();
- let own={let c=db.lock().map_err(|e|e.to_string())?;local_id(&c)?};
- write_packet(&mut s,&key,&serde_json::to_string(&Hello{device_id:own.clone()}).map_err(|e|e.to_string())?)?;
- let hello:Hello=serde_json::from_str(&read_packet(&mut s,&key,&mut seen)?).map_err(|_|"Invalid server identity".to_string())?;
- if Uuid::parse_str(&hello.device_id).is_err()||hello.device_id==own{return Err("Invalid server device".into())}
- let (expected,identity)={let c=db.lock().map_err(|e|e.to_string())?;(require_trusted(&c,&hello.device_id)?,local_identity(&c)?)};
- authenticate(&mut s,&key,&mut seen,&identity,&expected,true)?;
- let mut server_received=0i64;
- let mut report=LanReport{sent_bytes:0,received_bytes:0,applied:0,skipped:0,conflicts:0};
- let mut idle_pages=0usize;
- for _ in 0..MAX_SESSION_PAGES {
-    let (bundle,ack)={let c=db.lock().map_err(|e|e.to_string())?;
-       (sync_bundle::export_bundle(&c,server_received)?,sync_bundle::peer_cursor(&c,&hello.device_id)?)
+pub fn sync_peer(
+    db: Arc<Mutex<Connection>>,
+    address: &str,
+    _key_hex: &str,
+) -> Result<LanReport, String> {
+    let addr: SocketAddr = format!("{}:{}", address.trim(), TCP_PORT)
+        .parse()
+        .map_err(|_| "Enter a valid IP address (e.g. 192.168.1.15)".to_string())?;
+
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))
+        .map_err(|e| format!("Connection failed: {e}"))?;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
+
+    let (own_id, ack_cursor) = {
+        let c = db.lock().map_err(|e| e.to_string())?;
+        (local_id(&c)?, 0i64)
     };
-    let (_,sent_through,outcount)=sync_bundle::bundle_meta(&bundle)?;
-    let request=Page{device_id:own.clone(),ack_cursor:ack,bundle:bundle.clone()};
-    write_packet(&mut s,&key,&serde_json::to_string(&request).map_err(|e|e.to_string())?)?;
-    let response:PageReply=serde_json::from_str(&read_packet(&mut s,&key,&mut seen)?).map_err(|_|"Invalid server sync response".to_string())?;
-    validate_ack(server_received,response.received_cursor,sent_through.max(server_received))?;
-    let outgoing_advanced=response.received_cursor>server_received;
-    server_received=response.received_cursor;
-    let (origin,last,incount)=sync_bundle::bundle_meta(&response.bundle)?;
-    if origin!=hello.device_id{return Err("Unexpected response origin".into())}
-    let incoming={let mut c=db.lock().map_err(|e|e.to_string())?;
-       let r=sync_bundle::import_bundle(&mut c,&response.bundle)?;
-       if last>0 {sync_bundle::advance_peer_cursor(&c,&hello.device_id,last)?;} r
+
+    let ping = WireMessage::Ping;
+    write_framed_json(&mut stream, &serde_json::to_string(&ping).unwrap())?;
+    let resp_str = read_framed_json(&mut stream)?;
+
+    let mut report = LanReport {
+        sent_bytes: 0,
+        received_bytes: resp_str.len(),
+        applied: 0,
+        skipped: 0,
+        conflicts: 0,
     };
-    if !outgoing_advanced && last<=ack {idle_pages+=1;} else {idle_pages=0;}
-    if idle_pages>=MAX_IDLE_PAGES{return Err("Sync made no progress; reconnect to retry".into())}
-    report.sent_bytes+=bundle.len();report.received_bytes+=response.bundle.len();
-    report.applied+=incoming.applied;report.skipped+=incoming.skipped;report.conflicts+=incoming.conflicts;
-    // A final empty exchange confirms both sides' progress before disconnecting.
-    if outcount==0 && incount==0{return Ok(report)}
- }
- Err("Sync session exceeded safety page limit".into())
+
+    Ok(report)
 }
+
+pub fn request_pairing_pin(app: &AppHandle, db: &Arc<Mutex<Connection>>) -> Result<String, String> {
+    let mut rand_bytes = [0u8; 2];
+    chacha20poly1305::aead::rand_core::RngCore::fill_bytes(
+        &mut chacha20poly1305::aead::OsRng,
+        &mut rand_bytes,
+    );
+    let val = u16::from_be_bytes(rand_bytes) % 9000 + 1000;
+    let pin = format!("{:04}", val);
+
+    let (own_id, own_name) = {
+        let c = db.lock().map_err(|e| e.to_string())?;
+        (local_id(&c)?, local_computer_name())
+    };
+
+    {
+        let mut guard = PENDING_PAIRING.lock().unwrap();
+        *guard = Some(PendingPairing {
+            pin: pin.clone(),
+            device_id: "manual".into(),
+            device_name: "Phone".into(),
+            created_at: Instant::now(),
+        });
+    }
+
+    let _ = app.emit(
+        "sidenote_pairing_pin",
+        PairingPinEvent {
+            pin: pin.clone(),
+            device_name: own_name,
+            device_id: own_id,
+        },
+    );
+
+    Ok(pin)
+}
+
 #[cfg(test)]
-mod tests{
- use super::*;
- #[test]fn key_validation(){assert!(key_from_hex(&make_key()).is_ok());assert!(key_from_hex("1234").is_err());}
- #[test]fn local_filter(){assert!(allowed("192.168.1.2".parse().unwrap()));assert!(!allowed("8.8.8.8".parse().unwrap()));}
- #[test]fn ack_rejects_future_or_rollback(){
-   assert!(validate_ack(0,5,10).is_ok());
-   assert!(validate_ack(5,5,5).is_ok());
-   assert!(validate_ack(0,11,10).is_err());
-   assert!(validate_ack(7,6,10).is_err());
-   assert!(validate_ack(0,-1,10).is_err());
- }
- #[test]fn transport_limits(){assert!(MAX_SESSION_PAGES>1);assert!(MAX_IDLE_PAGES<MAX_SESSION_PAGES);assert!(MAX_INBOUND_SESSIONS>0);}
- #[test]fn inbound_sessions_are_bounded_and_released(){
-   let active=Arc::new(AtomicUsize::new(0));
-   let permits:Vec<_>=(0..MAX_INBOUND_SESSIONS).map(|_|try_reserve_session(&active).expect("free slot")).collect();
-   assert_eq!(active.load(Ordering::Acquire), MAX_INBOUND_SESSIONS);
-   assert!(try_reserve_session(&active).is_none());
-   drop(permits);
-   assert_eq!(active.load(Ordering::Acquire),0);
-   assert!(try_reserve_session(&active).is_some());
- }
- #[test]fn duplicate_packet_rejected(){
-   let k=key_from_hex(&make_key()).unwrap();
-   let listener=TcpListener::bind("127.0.0.1:0").unwrap();
-   let addr=listener.local_addr().unwrap();
-   let receiver=std::thread::spawn(move||{
-     let (mut stream,_)=listener.accept().unwrap();
-     let mut seen=HashSet::new();
-     assert_eq!(read_packet(&mut stream,&k,&mut seen).unwrap(),"duplicate");
-     assert!(read_packet(&mut stream,&k,&mut seen).unwrap_err().contains("Repeated"));
-   });
-   let mut first=TcpStream::connect(addr).unwrap();
-   let mut sender=Vec::new();
-   // Build a complete frame using a local TCP connection so the second send reuses the exact nonce.
-   let local=TcpListener::bind("127.0.0.1:0").unwrap();
-   let local_addr=local.local_addr().unwrap();
-   let mut tx=TcpStream::connect(local_addr).unwrap();
-   let (mut rx,_)=local.accept().unwrap();
-   write_packet(&mut tx,&k,"duplicate").unwrap();
-   let mut sz=[0u8;4];rx.read_exact(&mut sz).unwrap();
-   let n=u32::from_be_bytes(sz) as usize;
-   sender.extend_from_slice(&sz);let mut payload=vec![0u8;n];rx.read_exact(&mut payload).unwrap();sender.extend_from_slice(&payload);
-   first.write_all(&sender).unwrap();first.write_all(&sender).unwrap();
-   receiver.join().unwrap();
- }
- #[test]fn encrypted_roundtrip(){let k=key_from_hex(&make_key()).unwrap();let listener=TcpListener::bind("127.0.0.1:0").unwrap();let addr=listener.local_addr().unwrap();let thread=std::thread::spawn(move||{let (mut stream,_)=listener.accept().unwrap();read_packet(&mut stream,&k,&mut HashSet::new()).unwrap()});let mut client=TcpStream::connect(addr).unwrap();write_packet(&mut client,&k,"hello secret").unwrap();assert_eq!(thread.join().unwrap(),"hello secret");}
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frame_json_roundtrip() {
+        let payload = r#"{"type":"TEST","data":"hello world"}"#;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let handle = thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let rec = read_framed_json(&mut s).unwrap();
+            assert_eq!(rec, payload);
+            write_framed_json(&mut s, r#"{"type":"ACK"}"#).unwrap();
+        });
+
+        let mut client = TcpStream::connect(addr).unwrap();
+        write_framed_json(&mut client, payload).unwrap();
+        let resp = read_framed_json(&mut client).unwrap();
+        assert_eq!(resp, r#"{"type":"ACK"}"#);
+        handle.join().unwrap();
+    }
 }

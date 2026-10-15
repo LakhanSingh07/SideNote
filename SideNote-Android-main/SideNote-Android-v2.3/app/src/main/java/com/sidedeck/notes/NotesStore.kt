@@ -8,7 +8,7 @@ import java.util.UUID
 data class Note(val id: String, val title: String, val body: String, val color: Int, val isChecklist: Boolean, val updatedAt: Long, val pinned: Boolean = false, val archived: Boolean = false, val reminderAt: Long = 0L)
 
 /** Small, atomic SharedPreferences store. Serialized access is synchronized to prevent lost updates. */
-class NotesStore(context: Context) {
+class NotesStore(val context: Context) {
     private val prefs = context.getSharedPreferences("side_notes", Context.MODE_PRIVATE)
     @Synchronized fun all(): List<Note> {
         // Never silently reinterpret corrupted local data as an empty database.
@@ -32,14 +32,25 @@ class NotesStore(context: Context) {
         }.sortedWith(compareByDescending<Note> { it.pinned }.thenByDescending { it.updatedAt })
     }
     @Synchronized fun save(note: Note) {
-        val updated = all().filterNot { it.id == note.id } + note.copy(updatedAt = System.currentTimeMillis())
+        val updatedNote = note.copy(updatedAt = System.currentTimeMillis())
+        val updated = all().filterNot { it.id == note.id } + updatedNote
         write(updated)
+        try {
+            SyncStore(context).recordUpsert(updatedNote)
+            LanSyncManager.triggerSync(context)
+        } catch (_: Exception) {}
     }
     @Synchronized fun saveDirect(note: Note) {
         val updated = all().filterNot { it.id == note.id } + note
         write(updated)
     }
-    @Synchronized fun delete(id: String) { write(all().filterNot { it.id == id }) }
+    @Synchronized fun delete(id: String) { 
+        write(all().filterNot { it.id == id }) 
+        try {
+            SyncStore(context).recordDelete(id)
+            LanSyncManager.triggerSync(context)
+        } catch (_: Exception) {}
+    }
     fun fresh() = Note(UUID.randomUUID().toString(), "", "", 0, false, System.currentTimeMillis())
     @Synchronized fun exportJson(): String = prefs.getString("notes", "[]") ?: "[]"
     @Synchronized fun importJson(json: String) {

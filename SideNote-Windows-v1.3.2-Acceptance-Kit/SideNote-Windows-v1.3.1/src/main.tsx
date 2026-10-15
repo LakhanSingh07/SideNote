@@ -2215,6 +2215,17 @@ function LibraryView() {
   const [sharedKey, setSharedKey] = useState('');
   const [syncStatus, setSyncStatus] = useState('');
   const [syncBusy, setSyncBusy] = useState(false);
+  const [pairingPrompt, setPairingPrompt] = useState<{ pin: string; deviceName: string } | null>(null);
+  const [pairedToast, setPairedToast] = useState<string | null>(null);
+  const [trustedPeersList, setTrustedPeersList] = useState<Array<{ deviceId: string; label: string; publicKey?: string }>>([]);
+
+  const loadTrustedPeers = () => {
+    if (native) {
+      invoke<Array<{ deviceId: string; label: string; publicKey?: string }>>('trusted_peers')
+        .then(setTrustedPeersList)
+        .catch(() => {});
+    }
+  };
 
   useEffect(() => {
     if (native) {
@@ -2225,8 +2236,41 @@ function LibraryView() {
         .then(k => invoke<string>('public_key_fingerprint', { publicKey: k }))
         .then(setFingerprint)
         .catch(() => {});
+      loadTrustedPeers();
+
+      const unlistenPin = listen<{ pin: string; deviceName: string; deviceId: string }>('sidenote_pairing_pin', evt => {
+        setPairingPrompt({ pin: evt.payload.pin, deviceName: evt.payload.deviceName });
+      });
+      const unlistenPaired = listen<{ deviceId: string; deviceName: string }>('sidenote_paired', evt => {
+        setPairedToast(`Connected to ${evt.payload.deviceName || 'Android Mobile'}!`);
+        loadTrustedPeers();
+        setTimeout(() => setPairedToast(null), 6000);
+      });
+
+      return () => {
+        unlistenPin.then(f => f());
+        unlistenPaired.then(f => f());
+      };
     }
   }, []);
+
+  const handleGeneratePin = async () => {
+    try {
+      const pin = await invoke<string>('lan_get_pairing_pin');
+      setPairingPrompt({ pin, deviceName: 'Android Mobile' });
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleUntrustPeer = async (peerId: string) => {
+    try {
+      await invoke('untrust_peer', { deviceId: peerId });
+      loadTrustedPeers();
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   const visibleNotes = useMemo(() => {
     return notes.filter(n => {
@@ -2625,57 +2669,90 @@ function LibraryView() {
           </>
         ) : (
           <div className="sync-pane-card">
-            <h2 style={{ margin: '0 0 8px 0', fontSize: 18, fontWeight: 800 }}>Encrypted Cross-Platform Sync</h2>
-            <p style={{ margin: '0 0 16px 0', fontSize: 13, color: 'var(--ink-secondary)', lineHeight: 1.6 }}>
-              Sync notes seamlessly between Android and Windows over your local Wi-Fi network with zero cloud servers.
-            </p>
-
-            <div style={{ marginBottom: 16 }}>
-              <strong style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.8, color: 'var(--ink-secondary)' }}>
-                Your Device Identity
-              </strong>
-              <div className="sync-device-badge">
-                <ShieldCheck size={16} color="var(--brand-violet)" />
-                <span>Fingerprint: {fingerprint || 'Generating...'}</span>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+              <div>
+                <h2 style={{ margin: '0 0 6px 0', fontSize: 18, fontWeight: 800 }}>Seamless Wi-Fi Notes Sync</h2>
+                <p style={{ margin: 0, fontSize: 13, color: 'var(--ink-secondary)', lineHeight: 1.5 }}>
+                  Real-time notes sync between your Android mobile & Windows PC over Wi-Fi without cloud or accounts.
+                </p>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', background: 'rgba(34, 197, 94, 0.12)', border: '1px solid rgba(34, 197, 94, 0.3)', borderRadius: 20 }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />
+                <span style={{ fontSize: 12, fontWeight: 700, color: '#16a34a' }}>Sync Active</span>
               </div>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <input
-                style={{
-                  padding: '10px 14px',
-                  borderRadius: 12,
-                  border: '1px solid var(--surface-border)',
-                  background: 'var(--surface-field)',
-                  fontSize: 13,
-                }}
-                placeholder="Target Device IP Address (e.g. 192.168.1.45)"
-                value={remoteAddress}
-                onChange={e => setRemoteAddress(e.target.value)}
-              />
-              <input
-                style={{
-                  padding: '10px 14px',
-                  borderRadius: 12,
-                  border: '1px solid var(--surface-border)',
-                  background: 'var(--surface-field)',
-                  fontSize: 13,
-                }}
-                placeholder="64-character 256-bit pairing secret"
-                value={sharedKey}
-                onChange={e => setSharedKey(e.target.value)}
-              />
-              <button
-                className="primary-btn"
-                disabled={syncBusy || !remoteAddress.trim() || sharedKey.length !== 64}
-                onClick={handleStartSync}
-                style={{ marginTop: 8 }}
-              >
-                <RefreshCw size={15} /> {syncBusy ? 'Syncing...' : 'Sync with Device'}
-              </button>
-              {syncStatus && (
-                <p style={{ fontSize: 12, marginTop: 8, color: 'var(--brand-violet)' }}>{syncStatus}</p>
+            {pairedToast && (
+              <div style={{ background: 'rgba(34, 197, 94, 0.15)', border: '1px solid #22c55e', borderRadius: 12, padding: '10px 16px', marginBottom: 16, color: '#15803d', fontWeight: 700, fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Check size={16} /> {pairedToast}
+              </div>
+            )}
+
+            {/* 4-Digit Pairing Code Banner / Trigger */}
+            {pairingPrompt ? (
+              <div style={{ background: 'rgba(138, 75, 255, 0.08)', border: '2px solid var(--brand-violet)', borderRadius: 16, padding: '24px 20px', textAlign: 'center', marginBottom: 20 }}>
+                <span style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 1.2, color: 'var(--brand-violet)' }}>
+                  Mobile Pairing Request
+                </span>
+                <h3 style={{ margin: '8px 0 4px', fontSize: 20, fontWeight: 800 }}>Enter This PIN on Your Phone</h3>
+                <p style={{ margin: '0 0 16px', fontSize: 13, color: 'var(--ink-secondary)' }}>
+                  Open SideNote on your Android phone → Settings → Connect with Windows PC
+                </p>
+                <div style={{ display: 'inline-flex', gap: 14, padding: '14px 28px', background: 'var(--surface-primary)', borderRadius: 14, border: '2px solid var(--surface-border)', fontSize: 36, fontWeight: 900, letterSpacing: 10, color: 'var(--brand-violet)', fontFamily: 'monospace' }}>
+                  {pairingPrompt.pin}
+                </div>
+                <div style={{ marginTop: 16 }}>
+                  <button className="outline-btn" style={{ fontSize: 12, padding: '6px 16px' }} onClick={() => setPairingPrompt(null)}>
+                    Dismiss Code
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div style={{ background: 'var(--surface-field)', border: '1px solid var(--surface-border)', borderRadius: 16, padding: '18px 20px', marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+                <div>
+                  <h4 style={{ margin: '0 0 4px', fontSize: 15, fontWeight: 700 }}>Pair an Android Phone</h4>
+                  <p style={{ margin: 0, fontSize: 13, color: 'var(--ink-secondary)' }}>
+                    No camera or QR codes needed. Generates a 4-digit code to pair instantly.
+                  </p>
+                </div>
+                <button className="primary-btn" onClick={handleGeneratePin} style={{ padding: '8px 16px' }}>
+                  <Wifi size={15} /> Show Pairing PIN
+                </button>
+              </div>
+            )}
+
+            {/* Paired Devices List */}
+            <div style={{ marginBottom: 20 }}>
+              <strong style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.8, color: 'var(--ink-secondary)', display: 'block', marginBottom: 10 }}>
+                Paired Mobile Devices ({trustedPeersList.length})
+              </strong>
+              {trustedPeersList.length === 0 ? (
+                <div style={{ padding: '14px 18px', background: 'var(--surface-field)', borderRadius: 12, border: '1px dashed var(--surface-border)', fontSize: 13, color: 'var(--ink-secondary)' }}>
+                  No phones paired yet. Open SideNote on your phone to connect over Wi-Fi!
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {trustedPeersList.map(peer => (
+                    <div key={peer.deviceId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', background: 'var(--surface-field)', borderRadius: 12, border: '1px solid var(--surface-border)' }}>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: 14 }}>📱 {peer.label || 'Android Device'}</div>
+                        <div style={{ fontSize: 11, color: 'var(--ink-secondary)', marginTop: 2 }}>ID: {peer.deviceId.slice(0, 8)}... • Wi-Fi Connected</div>
+                      </div>
+                      <button className="outline-btn" style={{ fontSize: 12, padding: '4px 10px', color: '#ef4444' }} onClick={() => handleUntrustPeer(peer.deviceId)}>
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
               )}
+            </div>
+
+            {/* Direct Connect / Info */}
+            <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid var(--surface-border)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, color: 'var(--ink-secondary)' }}>
+                <span>TCP Port: <strong>43861</strong> • Discovery: <strong>43862</strong></span>
+                <span>Device Fingerprint: <strong>{fingerprint.slice(0, 14)}...</strong></span>
+              </div>
             </div>
           </div>
         )}

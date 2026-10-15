@@ -45,12 +45,33 @@ class MainActivity : Activity() {
 
 
 
+    private val syncReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (page == "Notes" || page == "Archive") {
+                renderNotes(page == "Archive")
+            } else if (page == "Settings") {
+                showSettings()
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         Ui.configure(this)
         setTheme(if (Ui.dark) R.style.Theme_SideNote_Dark else R.style.Theme_SideNote)
         super.onCreate(savedInstanceState)
         Ui.configure(this)
         captureSharedText(intent)
+
+        try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(syncReceiver, android.content.IntentFilter(LanSyncManager.ACTION_SYNC_UPDATED), RECEIVER_NOT_EXPORTED)
+            } else {
+                registerReceiver(syncReceiver, android.content.IntentFilter(LanSyncManager.ACTION_SYNC_UPDATED))
+            }
+        } catch (_: Exception) {}
+
+        LanSyncManager.startBackgroundListener(this)
+        LanSyncManager.triggerSync(this)
 
         // Automatically start overlay service if permission was already granted
         if (Settings.canDrawOverlays(this)) {
@@ -63,6 +84,11 @@ class MainActivity : Activity() {
         } else {
             onboarding(0)
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try { unregisterReceiver(syncReceiver) } catch (_: Exception) {}
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -593,6 +619,46 @@ class MainActivity : Activity() {
                 override fun onStartTrackingTouch(bar: SeekBar?) {}
                 override fun onStopTrackingTouch(bar: SeekBar?) { refreshOverlayAppearance() }
             }); body.addView(seek); body.addView(Ui.space(this, 28))
+            body.addView(Ui.text(this, "WI-FI SYNC WITH WINDOWS PC", 11f, true, Ui.muted)); body.addView(Ui.space(this, 12))
+            val isPaired = LanSyncManager.isPaired(this)
+            val pcName = LanSyncManager.getPairedPcName(this) ?: "Windows PC"
+            if (isPaired) {
+                val syncCard = Ui.surfaceCard(this, Ui.card)
+                syncCard.addView(Ui.text(this, "🟢 Connected to $pcName", 15f, true, Ui.ink))
+                syncCard.addView(Ui.space(this, 4))
+                syncCard.addView(Ui.text(this, "Live Wi-Fi sync active • Notes sync automatically across devices.", 13f, false, Ui.muted))
+                syncCard.addView(Ui.space(this, 14))
+                val btnRow = Ui.row(this)
+                val syncBtn = Ui.button(this, "Sync Now") {
+                    Toast.makeText(this, "Syncing with $pcName...", Toast.LENGTH_SHORT).show()
+                    LanSyncManager.triggerSync(this) { success, msg ->
+                        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+                        if (page == "Settings") showSettings()
+                    }
+                }
+                btnRow.addView(syncBtn, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = Ui.dp(this@MainActivity, 8) })
+                val unpairBtn = Ui.outline(this, "Unpair") {
+                    AlertDialog.Builder(this)
+                        .setTitle("Unpair from $pcName?")
+                        .setMessage("Notes will remain safe on both devices, but automatic Wi-Fi sync will stop.")
+                        .setPositiveButton("Unpair") { _, _ ->
+                            LanSyncManager.unpair(this)
+                            Toast.makeText(this, "Unpaired from PC", Toast.LENGTH_SHORT).show()
+                            showSettings()
+                        }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                }
+                btnRow.addView(unpairBtn, LinearLayout.LayoutParams(0, -2, 1f))
+                syncCard.addView(btnRow)
+                body.addView(syncCard)
+            } else {
+                body.addView(settingRow("Connect with Windows PC", "Pair over local Wi-Fi using 4-digit PIN (Zero QR code)") {
+                    showPairingDialog()
+                })
+            }
+            body.addView(Ui.space(this, 28))
+
             body.addView(Ui.text(this, "DATA & PRIVACY", 11f, true, Ui.muted)); body.addView(Ui.space(this, 12))
             body.addView(settingRow("Export my notes", "Save a JSON backup to a folder you choose") {
                 startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply { type = "application/json"; addCategory(Intent.CATEGORY_OPENABLE); putExtra(Intent.EXTRA_TITLE, "sidenote-backup.json") }, backupExport)
@@ -604,6 +670,87 @@ class MainActivity : Activity() {
             body.addView(settingRow("How SideNote works", "Edge swipe, permissions and note gestures") { onboarding(0) })
             body.addView(Ui.space(this, 16))
             body.addView(Ui.text(this, "Offline by default. Android may restrict overlays on secure screens or while device optimizes battery.", 12f, false, Ui.muted))
+        }
+    }
+
+    private fun showPairingDialog() {
+        val dialogView = Ui.column(this).apply {
+            setPadding(Ui.dp(this@MainActivity, 20), Ui.dp(this@MainActivity, 16), Ui.dp(this@MainActivity, 20), Ui.dp(this@MainActivity, 16))
+        }
+        val statusText = Ui.text(this, "Searching for Windows PC on Wi-Fi...", 13f, false, Ui.muted)
+        dialogView.addView(statusText)
+        dialogView.addView(Ui.space(this, 12))
+
+        val ipInput = EditText(this).apply {
+            hint = "Windows PC IP (e.g. 192.168.1.15)"
+            setText(getSharedPreferences("sidenote_sync", MODE_PRIVATE).getString("last_pc_ip", ""))
+            setSingleLine()
+            background = Ui.bg(Ui.field, Ui.dp(this@MainActivity, 10).toFloat(), Ui.border)
+            setPadding(Ui.dp(this@MainActivity, 12), Ui.dp(this@MainActivity, 10), Ui.dp(this@MainActivity, 12), Ui.dp(this@MainActivity, 10))
+            setTextColor(Ui.ink)
+            setHintTextColor(Ui.muted)
+        }
+        dialogView.addView(ipInput)
+        dialogView.addView(Ui.space(this, 10))
+
+        val pinInput = EditText(this).apply {
+            hint = "Enter 4-digit PIN shown on PC"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            filters = arrayOf(android.text.InputFilter.LengthFilter(4))
+            textSize = 20f
+            typeface = android.graphics.Typeface.MONOSPACE
+            gravity = Gravity.CENTER
+            background = Ui.bg(Ui.field, Ui.dp(this@MainActivity, 10).toFloat(), Ui.border)
+            setPadding(Ui.dp(this@MainActivity, 12), Ui.dp(this@MainActivity, 12), Ui.dp(this@MainActivity, 12), Ui.dp(this@MainActivity, 12))
+            setTextColor(Ui.ink)
+            setHintTextColor(Ui.muted)
+        }
+        dialogView.addView(pinInput)
+
+        val alert = AlertDialog.Builder(this)
+            .setTitle("Pair with Windows PC")
+            .setView(dialogView)
+            .setPositiveButton("Connect", null)
+            .setNegativeButton("Cancel", null)
+            .create()
+
+        alert.setOnShowListener {
+            val connectBtn = alert.getButton(AlertDialog.BUTTON_POSITIVE)
+            connectBtn.setOnClickListener {
+                val ip = ipInput.text.toString().trim()
+                val pin = pinInput.text.toString().trim()
+                if (ip.isBlank()) {
+                    Toast.makeText(this, "Please enter PC IP address", Toast.LENGTH_SHORT).show()
+                    return@setOnClickListener
+                }
+                if (pin.length != 4) {
+                    Toast.makeText(this, "Please enter 4-digit PIN", Toast.LENGTH_SHORT).show()
+                    return@setOnClickListener
+                }
+                connectBtn.isEnabled = false
+                connectBtn.text = "Connecting..."
+                LanSyncManager.pairWithPin(this, ip, pin) { success, msg ->
+                    connectBtn.isEnabled = true
+                    connectBtn.text = "Connect"
+                    Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+                    if (success) {
+                        alert.dismiss()
+                        if (page == "Settings") showSettings()
+                    }
+                }
+            }
+        }
+
+        alert.show()
+
+        LanSyncManager.discoverPc(this) { discovered ->
+            if (discovered != null) {
+                statusText.text = "Found ${discovered.name} (${discovered.ip})!"
+                statusText.setTextColor(Ui.violet)
+                ipInput.setText(discovered.ip)
+            } else {
+                statusText.text = "PC not discovered automatically. Check Wi-Fi or enter PC IP."
+            }
         }
     }
 

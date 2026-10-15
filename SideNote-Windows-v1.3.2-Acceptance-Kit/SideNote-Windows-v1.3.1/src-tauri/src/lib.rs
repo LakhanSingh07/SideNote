@@ -50,6 +50,10 @@ fn lan_start_server(db:State<'_,Database>,key_hex:String)->Result<String,String>
 fn lan_sync_peer(db:State<'_,Database>,address:String,key_hex:String)->Result<lan_sync::LanReport,String>{
  lan_sync::sync_peer(db.0.clone(),&address,&key_hex)
 }
+#[tauri::command]
+fn lan_get_pairing_pin(app:tauri::AppHandle,db:State<'_,Database>)->Result<String,String>{
+ lan_sync::request_pairing_pin(&app,&db.0)
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all="camelCase")]
@@ -234,10 +238,10 @@ fn upsert_note(app:tauri::AppHandle, db:State<'_,Database>, note:Note)->Result<(
  tx.execute("INSERT INTO notes (id,title,body,color,checklist,updated_at,pinned,archived,reminder_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(id) DO UPDATE SET title=excluded.title,body=excluded.body,color=excluded.color,checklist=excluded.checklist,updated_at=excluded.updated_at,pinned=excluded.pinned,archived=excluded.archived,reminder_at=excluded.reminder_at", params![note.id,note.title,note.body,note.color,note.is_checklist as i32,note.updated_at,note.pinned as i32,note.archived as i32,note.reminder_at]).map_err(|e|e.to_string())?;
  tx.execute("DELETE FROM note_origin WHERE note_id=?1",params![note.id]).map_err(|e|e.to_string())?;
  tx.execute("DELETE FROM note_tombstones WHERE note_id=?1",params![note.id]).map_err(|e|e.to_string())?;
- tx.execute("INSERT INTO sync_changes(entity_id,operation,payload,changed_at,origin_device) VALUES (?1,'upsert',?2,?3,?4)",params![note.id,payload,note.updated_at,origin]).map_err(|e|e.to_string())?;
- tx.commit().map_err(|e|e.to_string())?;
- let _ = app.emit("sidenote_changed", &note);
- Ok(())
+ tx.execute("INSERT INTO sync_changes(entity_id,operation,payload,changed_at,origin_device) VALUES (?1,'upsert',?2,?3,?4)",params![note.id,payload,note.updated_at,origin]).map_err(|e|e.to_string())?;  tx.commit().map_err(|e|e.to_string())?;
+  lan_sync::notify_peers_note_changed();
+  let _ = app.emit("sidenote_changed", &note);
+  Ok(())
 }
 
 #[tauri::command]
@@ -255,6 +259,7 @@ fn delete_note(app:tauri::AppHandle, db:State<'_,Database>, id:String)->Result<(
   tx.execute("INSERT INTO sync_changes(entity_id,operation,payload,changed_at,origin_device) VALUES (?1,'delete',NULL,?2,?3)",params![id,now,origin]).map_err(|e|e.to_string())?;
  }
  tx.commit().map_err(|e|e.to_string())?;
+ lan_sync::notify_peers_note_changed();
  let _ = app.emit("sidenote_deleted", &id);
  Ok(())
 }
@@ -281,7 +286,9 @@ pub fn run(){
   if !has_key {c.execute("ALTER TABLE trusted_peers ADD COLUMN public_key TEXT",[])?;}
   c.execute("INSERT OR IGNORE INTO sync_meta(key,value) VALUES ('device_id',?1)",params![Uuid::new_v4().to_string()])?;
   key_protection::migrate_or_create(&c).map_err(std::io::Error::other)?;
-  app.manage(Database(Arc::new(Mutex::new(c))));
+  let db_arc = Arc::new(Mutex::new(c));
+  app.manage(Database(db_arc.clone()));
+  lan_sync::init_auto_sync(app.handle().clone(), db_arc.clone());
   if let Some(w)=app.get_webview_window("main"){
     let _=w.set_skip_taskbar(true);
   }
@@ -327,7 +334,7 @@ pub fn run(){
      }
    }
  })
- .invoke_handler(tauri::generate_handler![lan_generate_key,lan_start_server,lan_sync_peer,local_device_public_key,public_key_fingerprint,trusted_peers,trust_peer,untrust_peer,list_notes,upsert_note,delete_note,save_window_placement,get_window_placement,local_device_id,export_local_changes,export_sync_bundle,import_sync_bundle,list_sync_conflicts,resolve_sync_conflict,set_window_bounds_atomic])
+ .invoke_handler(tauri::generate_handler![lan_generate_key,lan_start_server,lan_sync_peer,lan_get_pairing_pin,local_device_public_key,public_key_fingerprint,trusted_peers,trust_peer,untrust_peer,list_notes,upsert_note,delete_note,save_window_placement,get_window_placement,local_device_id,export_local_changes,export_sync_bundle,import_sync_bundle,list_sync_conflicts,resolve_sync_conflict,set_window_bounds_atomic])
  .run(tauri::generate_context!())
  .expect("error while running SideNote");
 }

@@ -132,6 +132,7 @@ class OverlayService : Service() {
             .setOngoing(true).setContentIntent(open).build()
         if (Build.VERSION.SDK_INT >= 34) startForeground(13, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         else startForeground(13, notification)
+        LanSyncManager.startBackgroundListener(this)
         createHandle()
     }
 
