@@ -172,8 +172,9 @@ input, textarea, button {
 }
 
 .tab.dragging {
-  z-index: 30;
-  transition: none;
+  z-index: 9999 !important;
+  transition: none !important;
+  filter: drop-shadow(-12px 24px 40px rgba(0, 0, 0, 0.38));
 }
 
 .tab.gone {

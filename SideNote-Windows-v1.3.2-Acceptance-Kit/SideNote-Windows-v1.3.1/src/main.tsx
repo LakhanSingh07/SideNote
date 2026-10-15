@@ -139,33 +139,44 @@ const DEMO_KEY = 'sidenote_demo_notes';
 const defaultSampleNotes: Note[] = [
   {
     id: 'sample-1',
-    title: '✨ Welcome to SideNote',
-    body: 'Your intelligent desktop companion. Peek from the edge, float sticky notes, and stay focused.',
-    color: 5, // Lavender
+    title: '🚀 Project Launch',
+    body: 'Ship v1.3.2 release with interactive grip drag and compact side widget.',
+    color: 0, // Coral #FF8A8C
     isChecklist: false,
-    updatedAt: Date.now() - 60000,
+    updatedAt: Date.now() - 30000,
     pinned: true,
     archived: false,
     reminderAt: 0,
   },
   {
     id: 'sample-2',
-    title: 'Grocery & Essentials',
-    body: '[x] Almond milk\n[x] Sourdough bread\n[ ] Fresh avocados\n[ ] Matcha tea powder',
-    color: 3, // Mint Green
-    isChecklist: true,
-    updatedAt: Date.now() - 120000,
+    title: '✨ Daily Focus',
+    body: 'Focus on high impact tasks, edge-dock convenience, and clean architecture.',
+    color: 1, // Yellow #FEF4AA
+    isChecklist: false,
+    updatedAt: Date.now() - 60000,
     pinned: false,
     archived: false,
     reminderAt: 0,
   },
   {
     id: 'sample-3',
-    title: 'Design Philosophy',
-    body: 'Soft pastel cards, tactile sticky-note feel, and smart edge interactions.',
-    color: 0, // Soft Yellow
+    title: '🛒 Shopping List',
+    body: '[x] Fresh avocados\n[x] Matcha green tea\n[ ] Almond milk\n[ ] Dark chocolate',
+    color: 2, // Cyan #90E4FF
+    isChecklist: true,
+    updatedAt: Date.now() - 90000,
+    pinned: false,
+    archived: false,
+    reminderAt: 0,
+  },
+  {
+    id: 'sample-4',
+    title: '💡 Quick Ideas',
+    body: 'Floating desktop notes with double click, instant autosave, and zero latency.',
+    color: 3, // Purple #DBACFF
     isChecklist: false,
-    updatedAt: Date.now() - 180000,
+    updatedAt: Date.now() - 120000,
     pinned: false,
     archived: false,
     reminderAt: 0,
@@ -416,11 +427,11 @@ function EdgeDock() {
   useEffect(() => {
     const handleFit = () => {
       const isSimulator = !native && view === 'main';
-      const targetH = isSimulator ? window.innerHeight * 0.55 : window.innerHeight;
-      const s = Math.min(0.75, (targetH - 12) / 1282);
+      const targetH = isSimulator ? window.innerHeight * 0.58 : window.innerHeight;
+      const s = Math.min(0.68, (targetH - 24) / 1340);
       document.documentElement.style.setProperty('--s', String(s));
       if (frameRef.current) {
-        const topOffset = (window.innerHeight - 1282 * s) / 2;
+        const topOffset = Math.max(4, Math.round((window.innerHeight - 1340 * s) / 2));
         frameRef.current.style.top = `${topOffset}px`;
       }
     };
@@ -447,7 +458,7 @@ function EdgeDock() {
     return () => clearInterval(interval);
   }, [notes]);
 
-  // Smooth OS window sizing with zero tear & zero flicker (compact 55% height)
+  // Smooth OS window sizing with zero tear & zero flicker (safe uncropped height)
   const adjustDockWidth = async (isOpen: boolean) => {
     if (!native) return;
     try {
@@ -458,9 +469,9 @@ function EdgeDock() {
       const screenWidth = mon.size.width / scale;
       const screenHeight = mon.size.height / scale;
 
-      // Compact 55% height
-      const targetHeight = Math.max(380, Math.round(screenHeight * 0.55));
-      const s = Math.min(0.75, (targetHeight - 12) / 1282);
+      // Uncropped dock height with proper safe margins for bottom curves & folder icon
+      const targetHeight = Math.max(420, Math.round(screenHeight * 0.58));
+      const s = Math.min(0.68, (targetHeight - 24) / 1340);
       
       const targetWidth = isOpen ? Math.round(520 * s) : Math.round(220 * s);
       const targetX = (mon.position.x / scale) + screenWidth - targetWidth;
@@ -662,7 +673,8 @@ function EdgeDock() {
           {dockNotes.map((n, idx) => {
             const isOpen = openNoteId === n.id;
             const isDragging = draggingId === n.id;
-            const col = FIGMA_COLORS[idx % 4];
+            const noteColorIdx = (typeof n.color === 'number' && n.color >= 0 && n.color < 4) ? n.color : (idx % 4);
+            const col = FIGMA_COLORS[noteColorIdx];
 
             return (
               <div
@@ -671,7 +683,7 @@ function EdgeDock() {
                 style={{
                   top: isDragging && dragTop !== null ? `${dragTop}px` : `${slot(idx)}px`,
                   ['--d' as any]: `${350 + idx * 90}ms`,
-                  zIndex: isDragging ? 40 : (isOpen ? 20 : 1),
+                  zIndex: isDragging ? 100 : (isOpen ? 20 : 1),
                 }}
                 onPointerEnter={() => {
                   if (!draggingId) void expandDock(n.id);
@@ -682,7 +694,7 @@ function EdgeDock() {
               >
                 <svg width="199" height="199">
                   <SvgShadow />
-                  <SvgShape colorIndex={idx} />
+                  <SvgShape colorIndex={noteColorIdx} />
                 </svg>
 
                 {/* Note written text visible on peeking tabs */}
