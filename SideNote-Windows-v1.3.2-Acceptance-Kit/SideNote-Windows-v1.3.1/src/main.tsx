@@ -395,6 +395,11 @@ function EdgeDock() {
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const frameRef = useRef<HTMLDivElement>(null);
 
+  // Anti-glitch state refs & mutex
+  const isExpandedRef = useRef(false);
+  const isBusyRef = useRef(false);
+  const collapseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Auto-fit frame to 70% window height matching user's exact specification
   useEffect(() => {
     const handleFit = () => {
@@ -430,7 +435,7 @@ function EdgeDock() {
     return () => clearInterval(interval);
   }, [notes]);
 
-  // Adjust native window dimensions when tab opens/closes (70% screen height only, snug footprint)
+  // Smooth OS window sizing with zero tear & zero flicker
   const adjustDockWidth = async (isOpen: boolean) => {
     if (!native) return;
     try {
@@ -441,20 +446,66 @@ function EdgeDock() {
       const screenWidth = mon.size.width / scale;
       const screenHeight = mon.size.height / scale;
 
-      // 70% height only as requested
       const targetHeight = Math.max(480, Math.round(screenHeight * 0.70));
       const s = Math.min(0.85, (targetHeight - 16) / 1282);
       
-      // Full breathing room: when closed, 230px * s so peeking tabs and curved notches are NEVER clipped (~110-130px); when open, 530px * s (~260-310px)
       const targetWidth = isOpen ? Math.round(530 * s) : Math.round(230 * s);
       const targetX = (mon.position.x / scale) + screenWidth - targetWidth;
       const targetY = (mon.position.y / scale) + Math.round((screenHeight - targetHeight) / 2);
 
-      await w.setSize(new LogicalSize(targetWidth, targetHeight));
-      await w.setPosition(new LogicalPosition(targetX, targetY));
+      if (isOpen) {
+        await w.setPosition(new LogicalPosition(targetX, targetY));
+        await w.setSize(new LogicalSize(targetWidth, targetHeight));
+      } else {
+        await w.setSize(new LogicalSize(targetWidth, targetHeight));
+        await w.setPosition(new LogicalPosition(targetX, targetY));
+      }
     } catch (e) {
       console.warn('Dock move error', e);
     }
+  };
+
+  const expandDock = async (noteIdToOpen?: string) => {
+    if (collapseTimerRef.current) {
+      clearTimeout(collapseTimerRef.current);
+      collapseTimerRef.current = null;
+    }
+    if (noteIdToOpen) {
+      setOpenNoteId(noteIdToOpen);
+    }
+    if (isExpandedRef.current || isBusyRef.current) return;
+    isBusyRef.current = true;
+    try {
+      await adjustDockWidth(true);
+      isExpandedRef.current = true;
+    } finally {
+      isBusyRef.current = false;
+    }
+  };
+
+  const collapseDock = () => {
+    if (collapseTimerRef.current) clearTimeout(collapseTimerRef.current);
+    collapseTimerRef.current = setTimeout(() => {
+      // Don't collapse if user is actively focused/typing in an editor!
+      if (document.activeElement && document.activeElement.classList.contains('txt')) {
+        return;
+      }
+      if (!isExpandedRef.current || isBusyRef.current) return;
+      
+      // 1. Fold card back into tab
+      setOpenNoteId(null);
+
+      // 2. Wait 250ms for CSS fold animation to complete cleanly, then shrink OS window
+      setTimeout(async () => {
+        isBusyRef.current = true;
+        try {
+          await adjustDockWidth(false);
+          isExpandedRef.current = false;
+        } finally {
+          isBusyRef.current = false;
+        }
+      }, 250);
+    }, 380);
   };
 
   const showToast = (text: string, undoNote?: Note) => {
@@ -485,15 +536,14 @@ function EdgeDock() {
     const fresh = createFreshNote();
     fresh.color = dockNotes.length % FIGMA_COLORS.length;
     await saveNote(fresh);
-    setOpenNoteId(fresh.id);
-    void adjustDockWidth(true);
+    await expandDock(fresh.id);
   };
 
   const handleDelete = async (n: Note) => {
     setOpenNoteId(null);
     await deleteNote(n.id);
     showToast('Note deleted', n);
-    void adjustDockWidth(false);
+    collapseDock();
   };
 
   const handleTextChange = (n: Note, newText: string) => {
@@ -505,27 +555,18 @@ function EdgeDock() {
     void saveNote(updated);
   };
 
-  const handleTabEnter = (id: string) => {
-    setOpenNoteId(id);
-    void adjustDockWidth(true);
-  };
-
-  const handleTabLeave = (id: string) => {
-    setTimeout(() => {
-      setOpenNoteId(curr => {
-        if (curr === id) {
-          void adjustDockWidth(false);
-          return null;
-        }
-        return curr;
-      });
-    }, 150);
-  };
-
   return (
     <>
       <FigmaSvgDefs />
-      <div className="frame" ref={frameRef} id="frame">
+      <div
+        className="frame"
+        ref={frameRef}
+        id="frame"
+        onPointerEnter={() => {
+          if (collapseTimerRef.current) clearTimeout(collapseTimerRef.current);
+        }}
+        onPointerLeave={collapseDock}
+      >
         <div className="dock" />
 
         <div id="tabs">
@@ -541,10 +582,11 @@ function EdgeDock() {
                   top: `${slot(idx)}px`,
                   ['--d' as any]: `${350 + idx * 90}ms`,
                 }}
-                onMouseEnter={() => handleTabEnter(n.id)}
-                onMouseLeave={() => handleTabLeave(n.id)}
+                onPointerEnter={() => {
+                  void expandDock(n.id);
+                }}
                 onClick={() => {
-                  if (!isOpen) handleTabEnter(n.id);
+                  void expandDock(n.id);
                 }}
               >
                 <svg width="199" height="199">
@@ -613,8 +655,7 @@ function EdgeDock() {
                       onKeyDown={e => {
                         if (e.key === 'Escape') {
                           (e.target as HTMLElement).blur();
-                          setOpenNoteId(null);
-                          void adjustDockWidth(false);
+                          collapseDock();
                         }
                       }}
                     >
