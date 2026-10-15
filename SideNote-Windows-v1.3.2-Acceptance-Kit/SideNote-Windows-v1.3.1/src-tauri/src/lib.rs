@@ -7,7 +7,7 @@ use uuid::Uuid;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tauri::{Manager, State};
+use tauri::{Manager, State, Emitter};
 use tauri_plugin_autostart::MacosLauncher;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
@@ -199,7 +199,7 @@ fn list_notes(db: State<'_,Database>) -> Result<Vec<Note>,String> {
 }
 
 #[tauri::command]
-fn upsert_note(db:State<'_,Database>, note:Note)->Result<(),String> {
+fn upsert_note(app:tauri::AppHandle, db:State<'_,Database>, note:Note)->Result<(),String> {
  if note.id.is_empty() || note.id.len()>160 || note.title.len()>2000 || note.body.len()>1000000 || !(0..=5).contains(&note.color) {return Err("Invalid note fields".into())}
  let mut c=db.0.lock().map_err(|e|e.to_string())?;
  let tx=c.transaction().map_err(|e|e.to_string())?;
@@ -210,11 +210,13 @@ fn upsert_note(db:State<'_,Database>, note:Note)->Result<(),String> {
  tx.execute("DELETE FROM note_origin WHERE note_id=?1",params![note.id]).map_err(|e|e.to_string())?;
  tx.execute("DELETE FROM note_tombstones WHERE note_id=?1",params![note.id]).map_err(|e|e.to_string())?;
  tx.execute("INSERT INTO sync_changes(entity_id,operation,payload,changed_at,origin_device) VALUES (?1,'upsert',?2,?3,?4)",params![note.id,payload,note.updated_at,origin]).map_err(|e|e.to_string())?;
- tx.commit().map_err(|e|e.to_string())
+ tx.commit().map_err(|e|e.to_string())?;
+ let _ = app.emit("sidenote_changed", &note);
+ Ok(())
 }
 
 #[tauri::command]
-fn delete_note(db:State<'_,Database>, id:String)->Result<(),String> {
+fn delete_note(app:tauri::AppHandle, db:State<'_,Database>, id:String)->Result<(),String> {
  if id.is_empty() || id.len()>160 {return Err("Invalid note ID".into())}
  let mut c=db.0.lock().map_err(|e|e.to_string())?;
  let tx=c.transaction().map_err(|e|e.to_string())?;
@@ -227,7 +229,9 @@ fn delete_note(db:State<'_,Database>, id:String)->Result<(),String> {
   tx.execute("INSERT INTO note_tombstones(note_id,deleted_at,origin_device) VALUES (?1,?2,?3) ON CONFLICT(note_id) DO UPDATE SET deleted_at=excluded.deleted_at,origin_device=excluded.origin_device",params![id,now,origin]).map_err(|e|e.to_string())?;
   tx.execute("INSERT INTO sync_changes(entity_id,operation,payload,changed_at,origin_device) VALUES (?1,'delete',NULL,?2,?3)",params![id,now,origin]).map_err(|e|e.to_string())?;
  }
- tx.commit().map_err(|e|e.to_string())
+ tx.commit().map_err(|e|e.to_string())?;
+ let _ = app.emit("sidenote_deleted", &id);
+ Ok(())
 }
 
 fn db_path(app:&tauri::App) -> Result<PathBuf,String> {
@@ -253,6 +257,14 @@ pub fn run(){
   c.execute("INSERT OR IGNORE INTO sync_meta(key,value) VALUES ('device_id',?1)",params![Uuid::new_v4().to_string()])?;
   key_protection::migrate_or_create(&c).map_err(std::io::Error::other)?;
   app.manage(Database(Arc::new(Mutex::new(c))));
+  if let Some(w)=app.get_webview_window("main"){
+    let _=w.set_skip_taskbar(true);
+  }
+  #[cfg(desktop)]
+  {
+    use tauri_plugin_autostart::ManagerExt;
+    let _ = app.autolaunch().enable();
+  }
   let open=MenuItem::with_id(app,"open","Open SideNote Dock",true,None::<&str>)?;
   let library=MenuItem::with_id(app,"library","All Notes & Settings",true,None::<&str>)?;
   let quit=MenuItem::with_id(app,"quit","Quit SideNote",true,None::<&str>)?;

@@ -21,30 +21,30 @@
   --surface-border: #E8E5DC;
   --surface-shadow: rgba(30, 20, 50, 0.08);
   
-  /* 6 Pastel Note Colors from Android */
-  --note-0-bg: #FFF6B8; /* Soft Yellow */
-  --note-0-border: #F3E692;
-  --note-0-ink: #3F3714;
+  /* 6 Pastel Note Colors matching Figma & SideNote Unified System */
+  --note-0-bg: #FF8A8C; /* Warm Coral */
+  --note-0-border: #FFAFB1;
+  --note-0-ink: #4A1E2B;
   
-  --note-1-bg: #FFDFC7; /* Warm Peach */
-  --note-1-border: #F3C4A5;
-  --note-1-ink: #482D1B;
+  --note-1-bg: #FEF4AA; /* Soft Yellow */
+  --note-1-border: #F3E692;
+  --note-1-ink: #3F3714;
   
-  --note-2-bg: #FFD4DE; /* Blush Pink */
-  --note-2-border: #F0B5C4;
-  --note-2-ink: #4A1E2B;
+  --note-2-bg: #90E4FF; /* Sky Cyan */
+  --note-2-border: #B2D7F5;
+  --note-2-ink: #1A364E;
   
-  --note-3-bg: #D4F5DE; /* Mint Green */
-  --note-3-border: #AEE0BD;
-  --note-3-ink: #1B3D28;
+  --note-3-bg: #DBACFF; /* Lavender Purple */
+  --note-3-border: #D1BDF5;
+  --note-3-ink: #372352;
   
-  --note-4-bg: #D6EBFC; /* Sky Blue */
-  --note-4-border: #B2D7F5;
-  --note-4-ink: #1A364E;
+  --note-4-bg: #D4F5DE; /* Mint Green */
+  --note-4-border: #AEE0BD;
+  --note-4-ink: #1B3D28;
   
-  --note-5-bg: #EBE0FD; /* Lavender */
-  --note-5-border: #D1BDF5;
-  --note-5-ink: #372352;
+  --note-5-bg: #FFD4DE; /* Blush Pink */
+  --note-5-border: #F0B5C4;
+  --note-5-ink: #4A1E2B;
 }
 
 [data-theme='dark'] {
@@ -128,9 +128,9 @@ input, textarea, button {
 
 .dock {
   position: absolute;
-  left: 575px;
+  left: 580px;
   top: 33px;
-  width: 154px;
+  width: 149px;
   height: 1282px;
   background: #FEFEFF;
   border-radius: 64px 0 0 64px;
@@ -143,39 +143,67 @@ input, textarea, button {
   from { transform: translateX(200px); }
 }
 
+@keyframes tabIn {
+  from { transform: translateX(200px); }
+  to { transform: translateX(0); }
+}
+
 .tab {
   position: absolute;
   left: 530px;
   width: 199px;
   height: 199px;
-  transition: top 0.5s cubic-bezier(0.34, 1.3, 0.64, 1);
+  transition: top 0.35s cubic-bezier(0.2, 0.9, 0.2, 1);
   animation: tabIn 0.7s cubic-bezier(0.34, 1.4, 0.64, 1) backwards;
   animation-delay: var(--d, 0ms);
   pointer-events: auto;
   cursor: pointer;
+  opacity: 1 !important;
 }
 
-@keyframes tabIn {
-  from { opacity: 0; transform: translateX(200px); }
+.frame.is-mounted .tab {
+  animation: none !important;
 }
 
-.tab > svg {
-  position: absolute;
-  left: 0;
-  top: 0;
-  overflow: visible;
-  pointer-events: none;
+#tabs.is-dragging .tab {
+  animation: none !important;
+  opacity: 1 !important;
+  transition: top 0.28s cubic-bezier(0.2, 0.9, 0.2, 1) !important;
 }
 
-.tab.open {
-  z-index: 20;
-}
-
-.tab.dragging {
-  z-index: 9999 !important;
+#tabs.is-dragging .tab.dragging {
   transition: none !important;
-  filter: drop-shadow(-12px 24px 40px rgba(0, 0, 0, 0.38));
+  animation: none !important;
+  opacity: 1 !important;
+  z-index: 9999 !important;
+  filter: drop-shadow(-14px 26px 48px rgba(0, 0, 0, 0.42));
 }
+
+.tab.dragging.tearing-off {
+  filter: drop-shadow(-16px 24px 44px rgba(139, 76, 255, 0.5)) !important;
+}
+
+.tab.dragging.tearing-off .card {
+  width: 474px;
+  height: 288px;
+  border-radius: 42px 0 0 42px;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  transform: rotate(-3deg) scale(1.03);
+  transition: transform 0.15s ease;
+  box-shadow: 0 0 0 2px #8A4BFF, -18px 28px 50px rgba(0,0,0,0.4) !important;
+}
+
+.tab.dragging.tearing-off .in {
+  opacity: 1 !important;
+}
+
+.tab.dragging.tearing-off svg {
+  transform: scale(1.06);
+  transition: transform 0.15s ease;
+  filter: drop-shadow(-8px 12px 24px rgba(138, 75, 255, 0.45));
+}
+
 
 .tab.gone {
   opacity: 0;
@@ -385,10 +413,10 @@ input, textarea, button {
 
 .fab {
   position: absolute;
-  left: 584px;
-  top: 1011px;
-  width: 123px;
-  height: 123px;
+  left: 604px;
+  top: 1040px;
+  width: 90px;
+  height: 90px;
   border-radius: 50%;
   border: 0;
   background: #8B4CFF;
@@ -396,7 +424,7 @@ input, textarea, button {
   cursor: pointer;
   display: grid;
   place-items: center;
-  box-shadow: 0 6px 34px 6px rgba(139, 76, 255, 0.30);
+  box-shadow: 0 6px 28px 4px rgba(139, 76, 255, 0.32);
   animation: tabIn 0.7s cubic-bezier(0.34, 1.4, 0.64, 1) 0.9s backwards;
   transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
   pointer-events: auto;
@@ -420,11 +448,11 @@ input, textarea, button {
 
 .folder {
   position: absolute;
-  left: 590px;
-  top: 1162px;
-  width: 111px;
-  height: 107px;
-  border-radius: 30px;
+  left: 608px;
+  top: 1152px;
+  width: 82px;
+  height: 78px;
+  border-radius: 24px;
   border: 0;
   background: #F4F2EC;
   color: #6B7280;
@@ -512,10 +540,23 @@ input, textarea, button {
   border-radius: 20px;
   display: flex;
   flex-direction: column;
-  box-shadow: none;
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.28);
   border: 1px solid rgba(0, 0, 0, 0.12);
   overflow: hidden;
   position: relative;
+  animation: noteFloatIn 0.36s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  will-change: transform, opacity;
+}
+
+@keyframes noteFloatIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.86) translateY(20px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
 }
 
 /* Top Accent Tape / Drag Header */
@@ -799,6 +840,37 @@ input, textarea, button {
 .sticky-textarea::placeholder {
   opacity: 0.45;
 }
+
+/* Rich Markdown Preview (replaces textarea when not focused) */
+.sticky-preview {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  min-height: 40px;
+  word-break: break-word;
+  white-space: normal;
+}
+
+.sticky-preview strong {
+  font-weight: 800;
+}
+
+.sticky-preview em {
+  font-style: italic;
+}
+
+.sticky-preview u {
+  text-decoration: underline;
+}
+
+.sticky-preview a {
+  color: var(--brand-violet, #8B4CFF);
+  text-decoration: underline;
+}
+
+.sticky-preview a:hover {
+  opacity: 0.75;
+}
+
 
 /* Checklist View inside Sticky Note */
 .checklist-container {
@@ -1498,5 +1570,15 @@ textarea.font-mono {
   font-size: 0.94em !important;
   letter-spacing: -0.2px !important;
 }
+
+/* Native Desktop Window Drag Regions (Only floating sticky notes & library are draggable, main dock is fixed) */
+[data-tauri-drag-region], .sticky-top-tape, .floating-card-wrapper, .card-header, .sticky-card-main {
+  -webkit-app-region: drag !important;
+}
+.dock, .frame, button, input, textarea, a, [data-no-drag], .txt, .card-actions, .sticky-actions, .fab, .folder, .tab, .sticky-control-row, .sticky-toolbar-row, .checklist-interactive-view, .raw-body-editor, .color-swatch-dot, .font-preset-item, .preset-btn, .checklist-item, .note-popup-card {
+  -webkit-app-region: no-drag !important;
+}
+
+
 
 

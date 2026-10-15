@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { invoke } from '@tauri-apps/api/core';
+import { emit, listen } from '@tauri-apps/api/event';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { getCurrentWindow, LogicalPosition, LogicalSize, availableMonitors, currentMonitor } from '@tauri-apps/api/window';
 import {
@@ -56,14 +57,14 @@ export type Note = {
   reminderAt: number;
 };
 
-// 6 Curated Pastel Note Colors matching Android Ui.kt
+// 6 Curated Pastel Note Colors matching Figma & SideNote Design System
 export const NOTE_COLORS = [
-  { name: 'Soft Yellow', bg: '#FFF6B8', border: '#F3E692', ink: '#3F3714', darkBg: '#3E381C', darkInk: '#FFF6B8' },
-  { name: 'Warm Peach', bg: '#FFDFC7', border: '#F3C4A5', ink: '#482D1B', darkBg: '#442B1A', darkInk: '#FFDFC7' },
-  { name: 'Blush Pink', bg: '#FFD4DE', border: '#F0B5C4', ink: '#4A1E2B', darkBg: '#42202D', darkInk: '#FFD4DE' },
-  { name: 'Mint Green', bg: '#D4F5DE', border: '#AEE0BD', ink: '#1B3D28', darkBg: '#1B3827', darkInk: '#D4F5DE' },
-  { name: 'Sky Blue', bg: '#D6EBFC', border: '#B2D7F5', ink: '#1A364E', darkBg: '#1A2F45', darkInk: '#D6EBFC' },
-  { name: 'Lavender', bg: '#EBE0FD', border: '#D1BDF5', ink: '#372352', darkBg: '#32254B', darkInk: '#EBE0FD' },
+  { name: 'Warm Coral', bg: '#FF8A8C', border: '#FFAFB1', ink: '#4A1E2B', darkBg: '#442B1A', darkInk: '#FFDFC7' }, // 0
+  { name: 'Soft Yellow', bg: '#FEF4AA', border: '#F3E692', ink: '#3F3714', darkBg: '#3E381C', darkInk: '#FFF6B8' }, // 1
+  { name: 'Sky Cyan', bg: '#90E4FF', border: '#B2D7F5', ink: '#1A364E', darkBg: '#1A2F45', darkInk: '#D6EBFC' },   // 2
+  { name: 'Lavender Purple', bg: '#DBACFF', border: '#D1BDF5', ink: '#372352', darkBg: '#32254B', darkInk: '#EBE0FD' }, // 3
+  { name: 'Mint Green', bg: '#D4F5DE', border: '#AEE0BD', ink: '#1B3D28', darkBg: '#1B3827', darkInk: '#D4F5DE' },  // 4
+  { name: 'Blush Pink', bg: '#FFD4DE', border: '#F0B5C4', ink: '#4A1E2B', darkBg: '#42202D', darkInk: '#FFD4DE' },  // 5
 ];
 
 const params = new URLSearchParams(window.location.search);
@@ -71,6 +72,7 @@ const view = params.get('view') || 'main';
 const targetNoteId = params.get('id');
 const native = Boolean((window as any).__TAURI_INTERNALS__);
 const EVENT_CHANGE = 'sidenote_changed';
+const syncChannel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('sidenote_realtime_sync') : null;
 
 // Placement helper
 type Placement = { label: string; x: number; y: number; width: number; height: number };
@@ -203,10 +205,14 @@ async function loadNotes(): Promise<Note[]> {
 async function saveNote(n: Note) {
   if (native) {
     await invoke('upsert_note', { note: n });
+    try {
+      await emit('sidenote_changed', n);
+    } catch {}
   } else {
     const list = loadLocalDemo().filter(x => x.id !== n.id);
     localStorage.setItem(DEMO_KEY, JSON.stringify([n, ...list]));
   }
+  syncChannel?.postMessage({ type: 'upsert', note: n });
   localStorage.setItem(EVENT_CHANGE, String(Date.now()));
   window.dispatchEvent(new Event(EVENT_CHANGE));
 }
@@ -214,10 +220,14 @@ async function saveNote(n: Note) {
 async function deleteNote(id: string) {
   if (native) {
     await invoke('delete_note', { id });
+    try {
+      await emit('sidenote_deleted', id);
+    } catch {}
   } else {
     const list = loadLocalDemo().filter(x => x.id !== id);
     localStorage.setItem(DEMO_KEY, JSON.stringify(list));
   }
+  syncChannel?.postMessage({ type: 'delete', id });
   localStorage.setItem(EVENT_CHANGE, String(Date.now()));
   window.dispatchEvent(new Event(EVENT_CHANGE));
 }
@@ -240,6 +250,11 @@ async function spawnWindow(label: string, url: string, width: number, height: nu
   if (!native) return false;
   const prior = await WebviewWindow.getByLabel(label);
   if (prior) {
+    if (typeof x === 'number' && typeof y === 'number') {
+      try {
+        await prior.setPosition(new LogicalPosition(x, y));
+      } catch {}
+    }
     await prior.show();
     await prior.setFocus();
     return true;
@@ -270,15 +285,44 @@ async function spawnWindow(label: string, url: string, width: number, height: nu
   return true;
 }
 
-async function openFloatingNote(n: Note) {
+async function openFloatingNote(n: Note, targetX?: number, targetY?: number) {
   if (native) {
     const label = placementKey(n.id);
     const old = await safePlacement(label);
     const p = old ? await clampPlacement(old) : null;
-    await spawnWindow(label, '/?view=note&id=' + encodeURIComponent(n.id), p?.width || 340, p?.height || 430, p?.x, p?.y);
+    let finalX = p?.x;
+    let finalY = p?.y;
+
+    const cardW = p?.width || 340;
+    const cardH = p?.height || 430;
+
+    const mon = await currentMonitor();
+    const scale = mon?.scaleFactor || 1;
+
+    if (typeof targetX === 'number' && typeof targetY === 'number') {
+      const rawPlacement = {
+        label,
+        x: Math.round(targetX - cardW / 2),
+        y: Math.round(targetY - 40),
+        width: cardW,
+        height: cardH,
+      };
+      const clamped = await clampPlacement(rawPlacement);
+      finalX = clamped.x;
+      finalY = clamped.y;
+    } else if (typeof finalX !== 'number' || typeof finalY !== 'number') {
+      if (mon) {
+        const screenW = mon.size.width / scale;
+        const screenH = mon.size.height / scale;
+        finalX = (mon.position.x / scale) + Math.max(40, screenW - cardW - 320);
+        finalY = (mon.position.y / scale) + Math.max(40, Math.round((screenH - cardH) / 2));
+      }
+    }
+
+    await spawnWindow(label, '/?view=note&id=' + encodeURIComponent(n.id), cardW, cardH, finalX, finalY);
   } else {
     // In web preview, fire custom event to open floating card
-    window.dispatchEvent(new CustomEvent('sidenote_preview_float', { detail: n }));
+    window.dispatchEvent(new CustomEvent('sidenote_preview_float', { detail: { note: n, x: targetX, y: targetY } }));
   }
 }
 
@@ -296,7 +340,7 @@ async function openLibraryWindow() {
   }
 }
 
-// Hook to observe notes
+// Hook to observe notes with instant real-time cross-window sync
 function useNotesList() {
   const [notes, setNotes] = useState<Note[]>([]);
   useEffect(() => {
@@ -306,12 +350,78 @@ function useNotesList() {
         if (active) setNotes(items);
       });
     reload();
-    const timer = setInterval(reload, 1200);
+    const timer = setInterval(reload, 600);
+
+    let unlistenChange: (() => void) | null = null;
+    let unlistenDelete: (() => void) | null = null;
+    if (native) {
+      listen<Note>('sidenote_changed', (evt) => {
+        if (!active) return;
+        const updated = evt.payload;
+        setNotes(prev => {
+          const idx = prev.findIndex(x => x.id === updated.id);
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = updated;
+            return next;
+          }
+          return [updated, ...prev];
+        });
+        reload();
+      }).then(fn => {
+        if (active) unlistenChange = fn;
+        else fn();
+      }).catch(console.warn);
+
+      listen<string>('sidenote_deleted', () => {
+        if (!active) return;
+        reload();
+      }).then(fn => {
+        if (active) unlistenDelete = fn;
+        else fn();
+      }).catch(console.warn);
+    }
+
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === EVENT_CHANGE || e.key === DEMO_KEY) {
+        reload();
+      }
+    };
+    window.addEventListener('storage', handleStorage);
     window.addEventListener(EVENT_CHANGE, reload);
+
+    const handleChannelMsg = (evt: MessageEvent) => {
+      if (!active) return;
+      if (evt.data?.type === 'upsert' && evt.data.note) {
+        const updated = evt.data.note as Note;
+        setNotes(prev => {
+          const idx = prev.findIndex(x => x.id === updated.id);
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = updated;
+            return next;
+          }
+          return [updated, ...prev];
+        });
+      } else if (evt.data?.type === 'delete' && evt.data.id) {
+        setNotes(prev => prev.filter(x => x.id !== evt.data.id));
+      }
+      reload();
+    };
+    if (syncChannel) {
+      syncChannel.addEventListener('message', handleChannelMsg);
+    }
+
     return () => {
       active = false;
       clearInterval(timer);
+      unlistenChange?.();
+      unlistenDelete?.();
+      window.removeEventListener('storage', handleStorage);
       window.removeEventListener(EVENT_CHANGE, reload);
+      if (syncChannel) {
+        syncChannel.removeEventListener('message', handleChannelMsg);
+      }
     };
   }, []);
   return notes;
@@ -337,7 +447,7 @@ function BrandBadge() {
 // 2. PRIMARY EXPERIENCE: FIGMA EDGE DOCK & PEEKING TABS
 // ==============================================================
 
-const FIGMA_COLORS = ['#FF8A8C', '#FEF4AA', '#90E4FF', '#DBACFF'];
+const FIGMA_COLORS = NOTE_COLORS.map(c => c.bg);
 const RED_PATH = 'M530.855 156.628C531.03 146.293 539.476 138 549.813 138H785.895C796.388 138 804.899 146.512 804.803 157.005C804.362 205.106 802.629 247.648 805.936 316.87C806.457 327.781 797.795 337 786.87 337H546.75C535.968 337 527.351 328.027 527.74 317.252C530.714 234.74 529.879 214.236 530.855 156.628Z';
 const YEL_PATH = 'M530.79 371.547C530.991 359.036 541.216 349 553.729 349H781.895C794.597 349 804.898 359.3 804.763 372.001C804.28 417.514 802.785 458.801 805.739 523.663C806.341 536.873 795.857 548 782.633 548H550.908C537.857 548 527.428 537.091 527.89 524.047C530.62 446.874 529.93 425.249 530.79 371.547Z';
 
@@ -374,6 +484,80 @@ function FigmaSvgDefs() {
   );
 }
 
+// ============================================================
+// Markdown → rich HTML renderer (inline spans, headings, links)
+// ============================================================
+function renderMarkdown(text: string): string {
+  if (!text) return '';
+  const lines = text.split('\n');
+  const out: string[] = [];
+  for (const raw of lines) {
+    let line = raw
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    // Headings
+    if (line.startsWith('### ')) {
+      out.push(`<span style="font-size:1.22em;font-weight:800;display:block;margin:3px 0">${line.slice(4)}</span>`);
+      continue;
+    }
+    if (line.startsWith('## ')) {
+      out.push(`<span style="font-size:1.32em;font-weight:800;display:block;margin:4px 0">${line.slice(3)}</span>`);
+      continue;
+    }
+    if (line.startsWith('# ')) {
+      out.push(`<span style="font-size:1.45em;font-weight:900;display:block;margin:5px 0">${line.slice(2)}</span>`);
+      continue;
+    }
+    // Bullet
+    if (line.startsWith('• ') || line.startsWith('- ') || line.startsWith('* ')) {
+      line = '&bull;&nbsp;' + line.slice(2);
+    }
+    // Checkbox items in text
+    if (line.startsWith('[ ] ')) {
+      line = '&#9634;&nbsp;' + line.slice(4);
+    } else if (line.startsWith('[x] ') || line.startsWith('[X] ')) {
+      line = '&#9632;&nbsp;<del>' + line.slice(4) + '</del>';
+    }
+    // Bold **text** and __text__
+    line = line.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    line = line.replace(/__(.+?)__/g, '<strong>$1</strong>');
+    // Italic *text* and _text_
+    line = line.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+    line = line.replace(/_([^_<>\n]+)_/g, '<em>$1</em>');
+    // Underline <u>text</u>
+    line = line.replace(/&lt;u&gt;(.+?)&lt;\/u&gt;/gi, '<u style="text-decoration:underline">$1</u>');
+    // Link [title](url)
+    line = line.replace(/\[([^\]]+)\]\(([^)]+)\)/g,
+      (_, title, href) => `<a href="${href}" target="_blank" rel="noopener noreferrer" class="note-md-link" style="color:var(--brand-violet);text-decoration:underline;cursor:pointer;font-weight:600">${title}</a>`);
+    out.push(`<span style="display:block;min-height:1.25em">${line || '&nbsp;'}</span>`);
+  }
+  return out.join('');
+}
+
+// Global delegated link opener (opens clicked links in default system browser)
+if (typeof document !== 'undefined') {
+  document.addEventListener('click', (e) => {
+    const a = (e.target as HTMLElement).closest('a');
+    if (a) {
+      const href = a.getAttribute('href');
+      if (href && (href.startsWith('http://') || href.startsWith('https://') || href.startsWith('mailto:'))) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (native) {
+          try {
+            invoke('plugin:opener|open_url', { path: href }).catch(() => {
+              window.open(href, '_blank', 'noopener,noreferrer');
+            });
+          } catch {
+            window.open(href, '_blank', 'noopener,noreferrer');
+          }
+        } else {
+          window.open(href, '_blank', 'noopener,noreferrer');
+        }
+      }
+    }
+  });
+}
+
 function SvgShadow() {
   return (
     <g transform="translate(-530,-138)">
@@ -385,18 +569,19 @@ function SvgShadow() {
 }
 
 function SvgShape({ colorIndex }: { colorIndex: number }) {
-  const c = colorIndex % 4;
+  const c = Math.abs(colorIndex) % NOTE_COLORS.length;
+  const col = NOTE_COLORS[c].bg;
   if (c === 0) {
     return (
       <g transform="translate(-530,-138)">
-        <path d={RED_PATH} fill="#FF8A8C" />
+        <path d={RED_PATH} fill={col} />
         {['rg2', 'rg3', 'rg4', 'rg5'].map(g => (
           <path key={g} d={RED_PATH} fill={`url(#${g})`} />
         ))}
       </g>
     );
   }
-  return <path transform="translate(-530,-349)" d={YEL_PATH} fill={FIGMA_COLORS[c]} />;
+  return <path transform="translate(-530,-349)" d={YEL_PATH} fill={col} />;
 }
 
 function EdgeDock() {
@@ -405,6 +590,10 @@ function EdgeDock() {
   const [toastInfo, setToastInfo] = useState<{ text: string; undoNote?: Note } | null>(null);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const frameRef = useRef<HTMLDivElement>(null);
+  // Width factor: 0.6 = narrow, 1.0 = wide (affects card + OS window)
+  const [widthFactor, setWidthFactor] = useState<number>(() => {
+    return parseFloat(localStorage.getItem('sidenote_width_factor') || '0.85');
+  });
 
   // Anti-glitch state refs & mutex
   const isExpandedRef = useRef(false);
@@ -422,6 +611,8 @@ function EdgeDock() {
   });
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dragTop, setDragTop] = useState<number | null>(null);
+  const [dragLeft, setDragLeft] = useState<number | null>(null);
+  const [isTearOff, setIsTearOff] = useState(false);
 
   // Auto-fit frame to smaller 55% window height matching user's request
   useEffect(() => {
@@ -439,7 +630,7 @@ function EdgeDock() {
     void adjustDockWidth(false);
     window.addEventListener('resize', handleFit);
     return () => window.removeEventListener('resize', handleFit);
-  }, []);
+  }, [widthFactor]);
 
   // Background reminder watcher: monitors notes and triggers pleasant chime
   useEffect(() => {
@@ -472,8 +663,9 @@ function EdgeDock() {
       // Uncropped dock height with proper safe margins for bottom curves & folder icon
       const targetHeight = Math.max(420, Math.round(screenHeight * 0.58));
       const s = Math.min(0.68, (targetHeight - 24) / 1340);
-      
-      const targetWidth = isOpen ? Math.round(520 * s) : Math.round(220 * s);
+      // widthFactor adjusts how wide the expanded card area is (user controllable)
+      const openWidth = Math.round(760 * s * widthFactor);
+      const targetWidth = isOpen ? Math.max(openWidth, Math.round(280 * s)) : Math.round(280 * s);
       const targetX = (mon.position.x / scale) + screenWidth - targetWidth;
       const targetY = (mon.position.y / scale) + Math.round((screenHeight - targetHeight) / 2);
 
@@ -568,8 +760,9 @@ function EdgeDock() {
 
   const draggingIdRef = useRef<string | null>(null);
 
-  // Real-time Up/Down Drag Reordering on the ≡ Grip Handle
+  // Real-time Up/Down Drag Reordering on Grip & Horizontal Pull-Out onto Desktop
   const handleGripPointerDown = (e: React.PointerEvent, n: Note) => {
+    if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
 
@@ -587,45 +780,161 @@ function EdgeDock() {
     setDragTop(baseTop);
 
     const s = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--s')) || 0.40;
+    const startX = e.clientX;
     const startY = e.clientY;
-    const maxTop = slot(dockNotes.length - 1);
+    const maxTop = slot(3) + 40;
     let lastIdx = currentIdx;
     let currentList = [...dockNotes];
+    let hasMoved = false;
 
     document.body.style.userSelect = 'none';
 
-    const onPointerMove = (ev: PointerEvent) => {
-      ev.preventDefault();
-      const delta = (ev.clientY - startY) / s;
-      const newTop = Math.min(maxTop + 30, Math.max(TOP0 - 30, baseTop + delta));
-      setDragTop(newTop);
+    let finished = false;
+    let dragDirection: 'undecided' | 'reorder' | 'pullout' = 'undecided';
 
-      const targetIdx = Math.max(0, Math.min(dockNotes.length - 1, Math.round((newTop - TOP0) / PITCH)));
-      if (targetIdx !== lastIdx) {
-        const item = currentList[lastIdx];
-        currentList.splice(lastIdx, 1);
-        currentList.splice(targetIdx, 0, item);
-        lastIdx = targetIdx;
-        const newOrder = currentList.map(x => x.id);
-        setCustomOrder(newOrder);
-        localStorage.setItem('sidenote_dock_order', JSON.stringify(newOrder));
-      }
-    };
-
-    const onPointerUp = (ev: PointerEvent) => {
+    const cleanup = () => {
       try {
-        targetEl.releasePointerCapture(ev.pointerId);
+        targetEl.releasePointerCapture(e.pointerId);
       } catch {}
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onCancel);
       document.body.style.userSelect = '';
+    };
+
+    const finishTearOff = async (dropX?: number, dropY?: number) => {
+      if (finished) return;
+      finished = true;
+      cleanup();
       setDraggingId(null);
       draggingIdRef.current = null;
       setDragTop(null);
+      setDragLeft(null);
+      setIsTearOff(false);
+      setOpenNoteId(null);
+      collapseDock();
+
+      showToast('✨ Note floating on desktop');
+      await openFloatingNote(n, dropX, dropY);
+    };
+
+    const onPointerMove = (ev: PointerEvent) => {
+      if (finished) return;
+      const dist = Math.hypot(ev.clientX - startX, ev.clientY - startY);
+      if (dist > 8) hasMoved = true;
+
+      const deltaX = (ev.clientX - startX) / s;
+      const deltaY = (ev.clientY - startY) / s;
+      const absX = Math.abs(deltaX);
+      const absY = Math.abs(deltaY);
+
+      // Lock drag intent: reorder vs pullout
+      if (dragDirection === 'undecided' && dist > 14) {
+        if (deltaX < -35 && absX > absY * 0.9) {
+          dragDirection = 'pullout';
+        } else if (absY > 10) {
+          dragDirection = 'reorder';
+        }
+      }
+
+      const isPullingOut = dragDirection === 'pullout' || (deltaX < -70 && absX > absY * 0.7);
+
+      if (isPullingOut) {
+        setIsTearOff(true);
+        // Follow cursor smoothly to the left
+        const horizontalShift = Math.max(-320, deltaX);
+        setDragLeft(horizontalShift);
+        const newTop = Math.min(maxTop, Math.max(TOP0 - 30, baseTop + deltaY));
+        setDragTop(newTop);
+        // DO NOT trigger tear-off mid-drag! Wait until the user releases the mouse (onPointerUp)!
+      } else {
+        // Pure slot reordering in the edge dock
+        setIsTearOff(false);
+        setDragLeft(0);
+        const newTop = Math.min(maxTop, Math.max(TOP0 - 30, baseTop + deltaY));
+        setDragTop(newTop);
+
+        const targetIdx = Math.max(0, Math.min(dockNotes.length - 1, Math.round((newTop - TOP0) / PITCH)));
+        if (targetIdx !== lastIdx) {
+          const item = currentList[lastIdx];
+          currentList.splice(lastIdx, 1);
+          currentList.splice(targetIdx, 0, item);
+          lastIdx = targetIdx;
+          const newOrder = currentList.map(x => x.id);
+          setCustomOrder(newOrder);
+          localStorage.setItem('sidenote_dock_order', JSON.stringify(newOrder));
+        }
+      }
+    };
+
+    const onPointerUp = async (ev: PointerEvent) => {
+      if (finished) return;
+      const deltaX = (ev.clientX - startX) / s;
+      const absX = Math.abs(deltaX);
+      const absY = Math.abs((ev.clientY - startY) / s);
+
+      if (!hasMoved) {
+        cleanup();
+        setDraggingId(null);
+        draggingIdRef.current = null;
+        setDragTop(null);
+        setDragLeft(null);
+        setIsTearOff(false);
+        void expandDock(n.id);
+        return;
+      }
+
+      // Check if user pulled out past the threshold and released anywhere on the desktop
+      const shouldTearOff = (dragDirection === 'pullout' && deltaX < -50) || (deltaX < -70 && absX > absY * 0.6) || ev.clientX < -10;
+
+      if (shouldTearOff) {
+        let dropX: number | undefined;
+        let dropY: number | undefined;
+
+        if (native) {
+          try {
+            const w = getCurrentWindow();
+            const pos = await w.outerPosition();
+            const mon = await currentMonitor();
+            const scale = mon?.scaleFactor || 1;
+            const dockLeft = pos.x / scale;
+            const dockTop = pos.y / scale;
+            dropX = dockLeft + ev.clientX;
+            dropY = dockTop + ev.clientY;
+          } catch {
+            dropX = ev.screenX;
+            dropY = ev.screenY;
+          }
+        } else {
+          dropX = ev.clientX;
+          dropY = ev.clientY;
+        }
+
+        await finishTearOff(dropX, dropY);
+      } else {
+        // Normal reorder or released back near the dock — settle into dock slot
+        cleanup();
+        setDraggingId(null);
+        draggingIdRef.current = null;
+        setDragTop(null);
+        setDragLeft(null);
+        setIsTearOff(false);
+      }
+    };
+
+    const onCancel = () => {
+      if (finished) return;
+      cleanup();
+      setDraggingId(null);
+      draggingIdRef.current = null;
+      setDragTop(null);
+      setDragLeft(null);
+      setIsTearOff(false);
     };
 
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onCancel);
   };
 
   const handleCreateNew = async () => {
@@ -634,7 +943,7 @@ function EdgeDock() {
       return;
     }
     const fresh = createFreshNote();
-    fresh.color = dockNotes.length % FIGMA_COLORS.length;
+    fresh.color = dockNotes.length % NOTE_COLORS.length;
     await saveNote(fresh);
     await expandDock(fresh.id);
   };
@@ -669,27 +978,34 @@ function EdgeDock() {
       >
         <div className="dock" />
 
-        <div id="tabs">
+        <div id="tabs" className={draggingId ? 'is-dragging' : ''}>
           {dockNotes.map((n, idx) => {
             const isOpen = openNoteId === n.id;
             const isDragging = draggingId === n.id;
-            const noteColorIdx = (typeof n.color === 'number' && n.color >= 0 && n.color < 4) ? n.color : (idx % 4);
-            const col = FIGMA_COLORS[noteColorIdx];
+            const noteColorIdx = typeof n.color === 'number' ? Math.abs(n.color) % NOTE_COLORS.length : (idx % NOTE_COLORS.length);
+            const col = NOTE_COLORS[noteColorIdx].bg;
 
             return (
               <div
                 key={n.id}
-                className={`tab ${isOpen ? 'open' : ''} ${isDragging ? 'dragging' : ''}`}
+                className={`tab ${isOpen ? 'open' : ''} ${isDragging ? 'dragging' : ''} ${isDragging && isTearOff ? 'tearing-off' : ''}`}
                 style={{
                   top: isDragging && dragTop !== null ? `${dragTop}px` : `${slot(idx)}px`,
+                  left: isDragging && dragLeft !== null ? `${530 + dragLeft}px` : '530px',
                   ['--d' as any]: `${350 + idx * 90}ms`,
                   zIndex: isDragging ? 100 : (isOpen ? 20 : 1),
                 }}
+                onPointerDown={e => {
+                  const target = e.target as HTMLElement;
+                  if (!target.closest('button, .card-action-btn, .txt')) {
+                    handleGripPointerDown(e, n);
+                  }
+                }}
                 onPointerEnter={() => {
-                  if (!draggingId) void expandDock(n.id);
+                  if (!draggingIdRef.current) void expandDock(n.id);
                 }}
                 onClick={() => {
-                  if (!draggingId) void expandDock(n.id);
+                  if (!draggingIdRef.current) void expandDock(n.id);
                 }}
               >
                 <svg width="199" height="199">
@@ -700,21 +1016,29 @@ function EdgeDock() {
                 {/* Note written text visible on peeking tabs */}
                 <div className="tab-preview">
                   <div className="tab-preview-title">
-                    {n.title.trim() || (n.body ? n.body.split('\n')[0].replace(/^\[[ x]\]\s*/i, '').slice(0, 20) : 'Note')}
+                    {(n.title.trim() || (n.body ? n.body.split('\n')[0].replace(/^\[[ x]\]\s*/i, '').slice(0, 24) : 'Note')).replace(/[*_#`~]/g, '')}
                   </div>
                   {n.body && (
                     <div className="tab-preview-body">
-                      {(n.title.trim() ? n.body : n.body.split('\n').slice(1).join(' ')).replace(/\n/g, ' ')}
+                      {(n.title.trim() ? n.body : n.body.split('\n').slice(1).join(' ')).replace(/\n/g, ' ').replace(/[*_#`~]/g, '').replace(/\[[ x]\]/gi, '• ')}
                     </div>
                   )}
                 </div>
 
                 <div className="card" style={{ ['--c' as any]: col }}>
                   <div className="in">
-                    <div className="card-top-bar">
+                    <div
+                      className="card-top-bar"
+                      onPointerDown={e => {
+                        const target = e.target as HTMLElement;
+                        if (!target.closest('button, .card-action-btn')) {
+                          handleGripPointerDown(e, n);
+                        }
+                      }}
+                    >
                       <div
                         className="grip"
-                        title="Drag up/down to reorder note (Double-click to float)"
+                        title="Drag to reorder or pull out onto desktop to float"
                         onPointerDown={e => handleGripPointerDown(e, n)}
                         onDoubleClick={async e => {
                           e.stopPropagation();
@@ -774,14 +1098,14 @@ function EdgeDock() {
 
         {/* Big Purple FAB with Rotating Plus */}
         <button className="fab" onClick={handleCreateNew} aria-label="New note" title="Create new note">
-          <svg width="58" height="58" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round">
             <path d="M12 5v14M5 12h14" />
           </svg>
         </button>
 
         {/* Rounded Folder Button to Open Full Library View */}
         <button className="folder" onClick={openLibraryWindow} aria-label="Folders" title="All notes, checklists & sync">
-          <svg width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round">
+          <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round">
             <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
           </svg>
         </button>
@@ -843,8 +1167,10 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
   const [linkUrlInput, setLinkUrlInput] = useState('https://');
   const [customReminderInput, setCustomReminderInput] = useState('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [saveStatus, setSaveStatus] = useState<'Saved' | 'Saving…'>('Saved');
+  const [saveStatus, setSaveStatus] = useState<'Saved' | 'Saving\u2026'>('Saved');
   const [isMaximized, setIsMaximized] = useState(false);
+  // Preview / Edit toggle — shows rendered markdown when not actively editing
+  const [isEditingBody, setIsEditingBody] = useState(false);
 
   useEffect(() => {
     if (native) {
@@ -896,7 +1222,7 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
         setHistoryIdx(0);
       }
     }
-  }, [note?.id]);
+  }, [note?.id, note?.color, note?.title, note?.body, note?.updatedAt]);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -1061,29 +1387,34 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
 
   // Text formatting insertion helper
   const insertFormatting = (prefix: string, suffix: string = '') => {
-    const el = textareaRef.current;
-    if (!el) {
-      const next = body + prefix + suffix;
-      setBody(next);
-      pushHistory(next);
-      void updateFields({ body: next });
-      return;
-    }
-    const start = el.selectionStart ?? 0;
-    const end = el.selectionEnd ?? 0;
-    const val = el.value;
-    const selected = val.substring(start, end);
-    const fallback = prefix === '• ' || prefix === '[ ] ' || prefix === '### ' ? '' : 'text';
-    const replacement = `${prefix}${selected || fallback}${suffix}`;
-    const nextVal = val.substring(0, start) + replacement + val.substring(end);
-    setBody(nextVal);
-    pushHistory(nextVal);
-    void updateFields({ body: nextVal });
+    // Switch to edit mode first so textarea is mounted
+    setIsEditingBody(true);
+    // Use setTimeout so textarea mounts before we try to access it
     setTimeout(() => {
-      el.focus();
-      const newPos = start + replacement.length;
-      el.setSelectionRange(newPos, newPos);
-    }, 10);
+      const el = textareaRef.current;
+      if (!el) {
+        const next = body + prefix + suffix;
+        setBody(next);
+        pushHistory(next);
+        void updateFields({ body: next });
+        return;
+      }
+      const start = el.selectionStart ?? body.length;
+      const end = el.selectionEnd ?? body.length;
+      const val = el.value;
+      const selected = val.substring(start, end);
+      const fallback = prefix === '• ' || prefix === '[ ] ' || prefix === '### ' ? '' : 'text';
+      const replacement = `${prefix}${selected || fallback}${suffix}`;
+      const nextVal = val.substring(0, start) + replacement + val.substring(end);
+      setBody(nextVal);
+      pushHistory(nextVal);
+      void updateFields({ body: nextVal });
+      setTimeout(() => {
+        el.focus();
+        const newPos = start + replacement.length;
+        el.setSelectionRange(newPos, newPos);
+      }, 10);
+    }, 15);
   };
 
   // Keyboard shortcuts (Ctrl+B, Ctrl+I, Ctrl+U, Ctrl+Z, Ctrl+Y, Tab)
@@ -1427,6 +1758,24 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
               {isTextMode ? 'Interactive View' : 'Raw Text Mode'}
             </button>
           )}
+
+          {/* Preview / Edit mode toggle */}
+          <button
+            className="control-mode-pill"
+            style={{
+              marginLeft: 'auto',
+              background: !isEditingBody ? 'var(--brand-violet)' : 'rgba(0,0,0,0.06)',
+              color: !isEditingBody ? '#fff' : 'currentColor',
+              fontWeight: 700,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4
+            }}
+            title={isEditingBody ? 'Switch to rendered markdown preview' : 'Switch to text editing mode'}
+            onClick={() => setIsEditingBody(prev => !prev)}
+          >
+            <span>{!isEditingBody ? '👁️ Rich View' : '✏️ Edit Mode'}</span>
+          </button>
         </div>
 
         {/* Rich Formatting Toolbar */}
@@ -1536,15 +1885,29 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
           />
 
           {!isChecklist || isTextMode ? (
-            <textarea
-              ref={textareaRef}
-              className={`sticky-textarea ${fontClass}`}
-              placeholder={isChecklist ? '[ ] First task…\n[ ] Second task…' : 'Jot down a quick thought…'}
-              value={body}
-              onChange={e => setBody(e.target.value)}
-              onBlur={handleBodyBlur}
-              onKeyDown={handleTextareaKeyDown}
-            />
+            isEditingBody ? (
+              <textarea
+                ref={textareaRef}
+                className={`sticky-textarea ${fontClass}`}
+                placeholder={isChecklist ? '[ ] First task…\n[ ] Second task…' : 'Jot down a quick thought…'}
+                value={body}
+                autoFocus
+                onChange={e => setBody(e.target.value)}
+                onBlur={() => {
+                  handleBodyBlur();
+                  setIsEditingBody(false);
+                }}
+                onKeyDown={handleTextareaKeyDown}
+              />
+            ) : (
+              <div
+                className={`sticky-textarea sticky-preview ${fontClass}`}
+                title="Click to edit"
+                onClick={() => setIsEditingBody(true)}
+                style={{ cursor: 'text', whiteSpace: 'pre-wrap' }}
+                dangerouslySetInnerHTML={{ __html: body ? renderMarkdown(body) : '<span style="opacity:0.38">Jot down a quick thought…</span>' }}
+              />
+            )
           ) : (
             <div className="checklist-container" data-no-drag onMouseDown={e => e.stopPropagation()}>
               {checklistItems.map((item, idx) => (
@@ -1812,8 +2175,8 @@ function LibraryView() {
   const notes = useNotesList();
   const [tab, setTab] = useState<'all' | 'pinned' | 'checklists' | 'archived' | 'sync' | 'backup'>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [dockSide, setDockSide] = useState<'right' | 'left'>(() => {
-    return (localStorage.getItem('sidenote_dock_side') as 'right' | 'left') || 'right';
+  const [widthFactor, setWidthFactor] = useState<number>(() => {
+    return parseFloat(localStorage.getItem('sidenote_width_factor') || '0.85');
   });
   const [defaultFont, setDefaultFont] = useState<string>(() => {
     return localStorage.getItem('sidenote_default_font') || 'roboto';
@@ -1987,12 +2350,6 @@ function LibraryView() {
     }
   };
 
-  const handleToggleDockSide = (side: 'left' | 'right') => {
-    setDockSide(side);
-    localStorage.setItem('sidenote_dock_side', side);
-    window.dispatchEvent(new Event('sidenote_dock_side_changed'));
-  };
-
   return (
     <div className="library-window">
       {/* Header with Drag Region & Window Controls */}
@@ -2070,24 +2427,42 @@ function LibraryView() {
               Manage full JSON backups, switch screen edge dock position, and test audio alerts.
             </p>
 
-            {/* Edge Dock Position Setting */}
+            {/* Edge Dock Width Setting */}
             <div className="backup-section-card">
               <div className="backup-info">
-                <h4>Screen Edge Dock Alignment</h4>
-                <p>Choose which side of your display the peeking dock rail anchors to.</p>
+                <h4>Dock Size & Card Width</h4>
+                <p>Adjust the width of expanded note cards in the peeking edge dock rail.</p>
               </div>
-              <div className="backup-actions">
+              <div className="backup-actions" style={{ display: 'flex', gap: 8 }}>
                 <button
-                  className={dockSide === 'right' ? 'primary-btn' : 'outline-btn'}
-                  onClick={() => handleToggleDockSide('right')}
+                  className={widthFactor <= 0.7 ? 'primary-btn' : 'outline-btn'}
+                  onClick={() => {
+                    setWidthFactor(0.65);
+                    localStorage.setItem('sidenote_width_factor', '0.65');
+                    setBackupStatus('Dock set to Compact');
+                  }}
                 >
-                  Right Edge
+                  Compact
                 </button>
                 <button
-                  className={dockSide === 'left' ? 'primary-btn' : 'outline-btn'}
-                  onClick={() => handleToggleDockSide('left')}
+                  className={widthFactor > 0.7 && widthFactor < 1.0 ? 'primary-btn' : 'outline-btn'}
+                  onClick={() => {
+                    setWidthFactor(0.85);
+                    localStorage.setItem('sidenote_width_factor', '0.85');
+                    setBackupStatus('Dock set to Standard');
+                  }}
                 >
-                  Left Edge
+                  Standard
+                </button>
+                <button
+                  className={widthFactor >= 1.0 ? 'primary-btn' : 'outline-btn'}
+                  onClick={() => {
+                    setWidthFactor(1.15);
+                    localStorage.setItem('sidenote_width_factor', '1.15');
+                    setBackupStatus('Dock set to Wide');
+                  }}
+                >
+                  Wide
                 </button>
               </div>
             </div>
@@ -2298,8 +2673,14 @@ function BrowserDesktopSimulator() {
 
   useEffect(() => {
     const handleFloat = (e: any) => {
-      const n = e.detail as Note;
-      setActiveFloatingNotes(prev => (prev.some(x => x.id === n.id) ? prev : [...prev, n]));
+      const detail = e.detail;
+      const n = (detail?.note || detail) as Note;
+      const posX = typeof detail?.x === 'number' ? Math.max(30, Math.min(window.innerWidth - 380, detail.x)) : 70;
+      const posY = typeof detail?.y === 'number' ? Math.max(30, Math.min(window.innerHeight - 480, detail.y)) : 50;
+      setActiveFloatingNotes(prev => {
+        const filtered = prev.filter(x => x.id !== n.id);
+        return [...filtered, { ...n, x: posX, y: posY } as any];
+      });
     };
     const handleCloseFloat = (e: any) => {
       const id = e.detail as string;
@@ -2345,15 +2726,46 @@ function BrowserDesktopSimulator() {
       />
 
       {/* Floating Sticky Notes on Desktop */}
-      <div style={{ position: 'absolute', top: 50, left: 70, width: 340, height: 430 }}>
-        {activeFloatingNotes.length > 0 && <FloatingNoteCard noteId={activeFloatingNotes[0].id} />}
-      </div>
-
-      {activeFloatingNotes.length > 1 && (
-        <div style={{ position: 'absolute', top: 110, left: 450, width: 340, height: 430 }}>
-          <FloatingNoteCard noteId={activeFloatingNotes[1].id} />
-        </div>
-      )}
+      {activeFloatingNotes.map((fn: any, i: number) => {
+        const left = typeof fn.x === 'number' ? fn.x : (70 + (i % 3) * 360);
+        const top = typeof fn.y === 'number' ? fn.y : (50 + (i % 3) * 60);
+        return (
+          <div
+            key={fn.id}
+            style={{
+              position: 'absolute',
+              top,
+              left,
+              width: 340,
+              height: 430,
+              zIndex: 20 + i,
+            }}
+            onPointerDown={e => {
+              const target = e.target as HTMLElement;
+              if (target.closest('button, input, textarea, a, .checklist-checkbox, .font-preset-item, .preset-btn, .color-swatch-dot')) {
+                return;
+              }
+              const startX = e.clientX;
+              const startY = e.clientY;
+              const initialLeft = left;
+              const initialTop = top;
+              const onMove = (ev: PointerEvent) => {
+                const nextX = Math.max(10, Math.min(window.innerWidth - 360, initialLeft + ev.clientX - startX));
+                const nextY = Math.max(10, Math.min(window.innerHeight - 450, initialTop + ev.clientY - startY));
+                setActiveFloatingNotes(prev => prev.map(item => item.id === fn.id ? { ...item, x: nextX, y: nextY } : item));
+              };
+              const onUp = () => {
+                window.removeEventListener('pointermove', onMove);
+                window.removeEventListener('pointerup', onUp);
+              };
+              window.addEventListener('pointermove', onMove);
+              window.addEventListener('pointerup', onUp);
+            }}
+          >
+            <FloatingNoteCard noteId={fn.id} />
+          </div>
+        );
+      })}
 
       {/* Edge Dock on Right */}
       <div style={{ position: 'absolute', top: 0, right: 0, height: '100%' }}>
