@@ -672,7 +672,9 @@ function EdgeDock() {
       const s = Math.min(0.46, Math.max(0.36, (targetHeight - 24) / 1340));
       const minOpenW = Math.round(580 * s);
       const openWidth = Math.max(minOpenW, Math.round(760 * s * widthFactor));
-      const targetWidth = isOpen ? Math.max(openWidth, Math.round(280 * s)) : Math.round(280 * s);
+      // When collapsed, width strictly matches peeking tabs (199 * s ~ 85px) so desktop behind is 100% clickable
+      const collapsedWidth = Math.round(202 * s);
+      const targetWidth = isOpen ? Math.max(openWidth, collapsedWidth) : collapsedWidth;
       const targetX = Math.round((mon.position.x / scale) + screenWidth - targetWidth);
       const targetY = Math.round((mon.position.y / scale) + (screenHeight - targetHeight) / 2);
 
@@ -706,21 +708,21 @@ function EdgeDock() {
   };
 
   const collapseDock = () => {
-    if (draggingIdRef.current) return; // Don't collapse while dragging!
+    if (draggingIdRef.current) return; // Don't collapse while dragging
     if (collapseTimerRef.current) clearTimeout(collapseTimerRef.current);
     collapseTimerRef.current = setTimeout(() => {
       if (draggingIdRef.current) return;
-      // Don't collapse if user is actively focused/typing in an editor!
+      // Don't collapse if user is actively typing in text editor
       if (document.activeElement && document.activeElement.classList.contains('txt')) {
         return;
       }
-      if (!isExpandedRef.current || isBusyRef.current) return;
       
       // 1. Fold card back into tab
       setOpenNoteId(null);
 
-      // 2. Wait 250ms for CSS fold animation to complete cleanly, then shrink OS window
+      // 2. Shrink window back to narrow 85px width so desktop behind is completely unblocked
       setTimeout(async () => {
+        if (draggingIdRef.current) return;
         isBusyRef.current = true;
         try {
           await adjustDockWidth(false);
@@ -728,9 +730,24 @@ function EdgeDock() {
         } finally {
           isBusyRef.current = false;
         }
-      }, 250);
-    }, 380);
+      }, 160);
+    }, 100);
   };
+
+  // Window-level tracking: immediately collapse dock when pointer leaves window area
+  useEffect(() => {
+    const onWinLeave = () => {
+      if (!draggingIdRef.current) {
+        collapseDock();
+      }
+    };
+    window.addEventListener('pointerleave', onWinLeave);
+    window.addEventListener('blur', onWinLeave);
+    return () => {
+      window.removeEventListener('pointerleave', onWinLeave);
+      window.removeEventListener('blur', onWinLeave);
+    };
+  }, []);
 
   const showToast = (text: string, undoNote?: Note) => {
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
@@ -903,8 +920,9 @@ function EdgeDock() {
         setDragTop(null);
         setDragLeft(null);
 
+        isExpandedRef.current = false;
         if (native) {
-          await adjustDockWidth(true);
+          await adjustDockWidth(false);
         }
       }
     };
@@ -917,8 +935,9 @@ function EdgeDock() {
       draggingIdRef.current = null;
       setDragTop(null);
       setDragLeft(null);
+      isExpandedRef.current = false;
       if (native) {
-        await adjustDockWidth(true);
+        await adjustDockWidth(false);
       }
     };
 
