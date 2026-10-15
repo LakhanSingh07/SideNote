@@ -172,6 +172,31 @@ fn resolve_sync_conflict(db:State<'_,Database>, conflict_id:i64, action:String) 
 }
 
 #[tauri::command]
+fn set_window_bounds_atomic(window: tauri::WebviewWindow, x: i32, y: i32, width: i32, height: i32) -> Result<(), String> {
+  #[cfg(windows)]
+  {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER, SWP_NOOWNERZORDER};
+    let hwnd = window.hwnd().map_err(|e| e.to_string())?;
+    unsafe {
+      SetWindowPos(
+        hwnd.0 as _,
+        0 as _,
+        x,
+        y,
+        width,
+        height,
+        SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER,
+      );
+    }
+  }
+  #[cfg(not(windows))]
+  {
+    let _ = (window, x, y, width, height);
+  }
+  Ok(())
+}
+
+#[tauri::command]
 fn save_window_placement(db:State<'_,Database>, placement:WindowPlacement)->Result<(),String> {
  if placement.label.len()>160 || !placement.label.starts_with("note-") {return Err("Invalid window label".into())}
  if ![placement.x,placement.y,placement.width,placement.height].iter().all(|v|v.is_finite()) || placement.width<150. || placement.width>2400. || placement.height<100. || placement.height>2000. {return Err("Invalid placement".into())}
@@ -302,7 +327,7 @@ pub fn run(){
      }
    }
  })
- .invoke_handler(tauri::generate_handler![lan_generate_key,lan_start_server,lan_sync_peer,local_device_public_key,public_key_fingerprint,trusted_peers,trust_peer,untrust_peer,list_notes,upsert_note,delete_note,save_window_placement,get_window_placement,local_device_id,export_local_changes,export_sync_bundle,import_sync_bundle,list_sync_conflicts,resolve_sync_conflict])
+ .invoke_handler(tauri::generate_handler![lan_generate_key,lan_start_server,lan_sync_peer,local_device_public_key,public_key_fingerprint,trusted_peers,trust_peer,untrust_peer,list_notes,upsert_note,delete_note,save_window_placement,get_window_placement,local_device_id,export_local_changes,export_sync_bundle,import_sync_bundle,list_sync_conflicts,resolve_sync_conflict,set_window_bounds_atomic])
  .run(tauri::generate_context!())
  .expect("error while running SideNote");
 }

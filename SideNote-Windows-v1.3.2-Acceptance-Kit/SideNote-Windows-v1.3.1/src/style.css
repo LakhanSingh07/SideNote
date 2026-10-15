@@ -179,29 +179,26 @@ input, textarea, button {
   filter: drop-shadow(-14px 26px 48px rgba(0, 0, 0, 0.42));
 }
 
-.tab.dragging.tearing-off {
-  filter: drop-shadow(-16px 24px 44px rgba(139, 76, 255, 0.5)) !important;
-}
-
-.tab.dragging.tearing-off .card {
-  width: 474px;
-  height: 288px;
-  border-radius: 42px 0 0 42px;
+.tab.dragging .card {
+  width: 474px !important;
+  height: 288px !important;
+  border-radius: 40px 0 0 40px !important;
   opacity: 1 !important;
-  pointer-events: auto !important;
-  transform: rotate(-3deg) scale(1.03);
-  transition: transform 0.15s ease;
-  box-shadow: 0 0 0 2px #8A4BFF, -18px 28px 50px rgba(0,0,0,0.4) !important;
+  pointer-events: none !important;
+  transform: scale(0.92) rotate(-2deg);
+  transform-origin: 85% 20%;
+  transition: transform 0.1s ease;
+  box-shadow: 0 0 0 1.5px rgba(138, 75, 255, 0.45), -14px 24px 50px rgba(0, 0, 0, 0.38) !important;
 }
 
-.tab.dragging.tearing-off .in {
+.tab.dragging .in {
   opacity: 1 !important;
+  pointer-events: none !important;
 }
 
-.tab.dragging.tearing-off svg {
-  transform: scale(1.06);
-  transition: transform 0.15s ease;
-  filter: drop-shadow(-8px 12px 24px rgba(138, 75, 255, 0.45));
+.tab.dragging svg {
+  transform: scale(0.98);
+  transition: transform 0.1s ease;
 }
 
 

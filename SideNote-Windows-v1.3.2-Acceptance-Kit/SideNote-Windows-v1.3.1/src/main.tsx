@@ -614,22 +614,30 @@ function EdgeDock() {
   const [dragLeft, setDragLeft] = useState<number | null>(null);
   const [isTearOff, setIsTearOff] = useState(false);
 
-  // Auto-fit frame to smaller 55% window height matching user's request
+  // Stable scale strictly based on monitor screen display height (never distorted by window resizing or full-screen drag canvas)
   useEffect(() => {
-    const handleFit = () => {
-      const isSimulator = !native && view === 'main';
-      const targetH = isSimulator ? window.innerHeight * 0.58 : window.innerHeight;
-      const s = Math.min(0.68, (targetH - 24) / 1340);
+    const applyStableScale = async () => {
+      let screenH = 1080;
+      if (native) {
+        try {
+          const mon = await currentMonitor();
+          if (mon) {
+            screenH = mon.size.height / (mon.scaleFactor || 1);
+          }
+        } catch {}
+      } else {
+        screenH = window.innerHeight;
+      }
+      const targetHeight = Math.max(420, Math.round(screenH * 0.58));
+      const s = Math.min(0.46, Math.max(0.36, (targetHeight - 24) / 1340));
       document.documentElement.style.setProperty('--s', String(s));
       if (frameRef.current) {
-        const topOffset = Math.max(4, Math.round((window.innerHeight - 1340 * s) / 2));
+        const topOffset = Math.max(4, Math.round((screenH * 0.58 - 1340 * s) / 2));
         frameRef.current.style.top = `${topOffset}px`;
       }
     };
-    handleFit();
+    void applyStableScale();
     void adjustDockWidth(false);
-    window.addEventListener('resize', handleFit);
-    return () => window.removeEventListener('resize', handleFit);
   }, [widthFactor]);
 
   // Background reminder watcher: monitors notes and triggers pleasant chime
@@ -649,34 +657,31 @@ function EdgeDock() {
     return () => clearInterval(interval);
   }, [notes]);
 
-  // Smooth OS window sizing with zero tear & zero flicker (safe uncropped height)
+  // Smooth OS window sizing with zero tear & zero flicker (Atomic Win32 SetWindowPos)
   const adjustDockWidth = async (isOpen: boolean) => {
     if (!native) return;
     try {
-      const w = getCurrentWindow();
       const mon = await currentMonitor();
       if (!mon) return;
       const scale = mon.scaleFactor || 1;
       const screenWidth = mon.size.width / scale;
       const screenHeight = mon.size.height / scale;
 
-      // Uncropped dock height with proper safe margins for bottom curves & folder icon
+      // Safe dock height matching 58% display height
       const targetHeight = Math.max(420, Math.round(screenHeight * 0.58));
-      const s = Math.min(0.68, (targetHeight - 24) / 1340);
-      // Ensure openWidth is always wide enough for full card (474 * s) + shadow (44 * s) + safe margins
+      const s = Math.min(0.46, Math.max(0.36, (targetHeight - 24) / 1340));
       const minOpenW = Math.round(580 * s);
       const openWidth = Math.max(minOpenW, Math.round(760 * s * widthFactor));
       const targetWidth = isOpen ? Math.max(openWidth, Math.round(280 * s)) : Math.round(280 * s);
-      const targetX = (mon.position.x / scale) + screenWidth - targetWidth;
-      const targetY = (mon.position.y / scale) + Math.round((screenHeight - targetHeight) / 2);
+      const targetX = Math.round((mon.position.x / scale) + screenWidth - targetWidth);
+      const targetY = Math.round((mon.position.y / scale) + (screenHeight - targetHeight) / 2);
 
-      if (isOpen) {
-        await w.setPosition(new LogicalPosition(targetX, targetY));
-        await w.setSize(new LogicalSize(targetWidth, targetHeight));
-      } else {
-        await w.setSize(new LogicalSize(targetWidth, targetHeight));
-        await w.setPosition(new LogicalPosition(targetX, targetY));
-      }
+      await invoke('set_window_bounds_atomic', {
+        x: targetX,
+        y: targetY,
+        width: targetWidth,
+        height: targetHeight,
+      });
     } catch (e) {
       console.warn('Dock move error', e);
     }
@@ -801,9 +806,12 @@ function EdgeDock() {
           const screenHeight = mon.size.height / scale;
           const monX = mon.position.x / scale;
           const monY = mon.position.y / scale;
-          const w = getCurrentWindow();
-          await w.setPosition(new LogicalPosition(monX, monY));
-          await w.setSize(new LogicalSize(screenWidth, screenHeight));
+          await invoke('set_window_bounds_atomic', {
+            x: Math.round(monX),
+            y: Math.round(monY),
+            width: Math.round(screenWidth),
+            height: Math.round(screenHeight),
+          });
         }
       } catch (err) {
         console.warn('Canvas expansion error', err);
