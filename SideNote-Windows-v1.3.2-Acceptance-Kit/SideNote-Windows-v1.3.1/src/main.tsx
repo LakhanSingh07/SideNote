@@ -675,14 +675,18 @@ function EdgeDock() {
       // When collapsed, width strictly matches peeking tabs (199 * s ~ 85px) so desktop behind is 100% clickable
       const collapsedWidth = Math.round(202 * s);
       const targetWidth = isOpen ? Math.max(openWidth, collapsedWidth) : collapsedWidth;
-      const targetX = Math.round((mon.position.x / scale) + screenWidth - targetWidth);
-      const targetY = Math.round((mon.position.y / scale) + (screenHeight - targetHeight) / 2);
+
+      // Win32 SetWindowPos expects physical device pixels: convert logical to physical
+      const physW = Math.round(targetWidth * scale);
+      const physH = Math.round(targetHeight * scale);
+      const physX = mon.position.x + mon.size.width - physW;
+      const physY = mon.position.y + Math.round((mon.size.height - physH) / 2);
 
       await invoke('set_window_bounds_atomic', {
-        x: targetX,
-        y: targetY,
-        width: targetWidth,
-        height: targetHeight,
+        x: physX,
+        y: physY,
+        width: physW,
+        height: physH,
       });
     } catch (e) {
       console.warn('Dock move error', e);
@@ -818,16 +822,11 @@ function EdgeDock() {
       try {
         const mon = await currentMonitor();
         if (mon) {
-          const scale = mon.scaleFactor || 1;
-          const screenWidth = mon.size.width / scale;
-          const screenHeight = mon.size.height / scale;
-          const monX = mon.position.x / scale;
-          const monY = mon.position.y / scale;
           await invoke('set_window_bounds_atomic', {
-            x: Math.round(monX),
-            y: Math.round(monY),
-            width: Math.round(screenWidth),
-            height: Math.round(screenHeight),
+            x: mon.position.x,
+            y: mon.position.y,
+            width: mon.size.width,
+            height: mon.size.height,
           });
         }
       } catch (err) {
