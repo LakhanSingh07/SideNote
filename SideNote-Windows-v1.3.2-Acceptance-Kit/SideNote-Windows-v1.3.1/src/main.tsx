@@ -761,8 +761,8 @@ function EdgeDock() {
 
   const draggingIdRef = useRef<string | null>(null);
 
-  // Real-time Up/Down Drag Reordering on Grip & Instant Tear-Out onto Full Desktop
-  const handleGripPointerDown = (e: React.PointerEvent, n: Note) => {
+  // Real-time Up/Down Drag Reordering on Grip & Free Full-Desktop Drag & Drop
+  const handleGripPointerDown = async (e: React.PointerEvent, n: Note) => {
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
@@ -782,14 +782,33 @@ function EdgeDock() {
     setDragLeft(0);
 
     const s = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--s')) || 0.40;
-    const startX = e.clientX;
-    const startY = e.clientY;
+    const startScreenX = e.screenX;
+    const startScreenY = e.screenY;
     const maxTop = slot(3) + 40;
     let lastIdx = currentIdx;
     let currentList = [...dockNotes];
     let hasMoved = false;
 
     document.body.style.userSelect = 'none';
+
+    // Temporarily expand dock window to cover the screen so dragging has 100% full-screen canvas with zero cropping
+    if (native) {
+      try {
+        const mon = await currentMonitor();
+        if (mon) {
+          const scale = mon.scaleFactor || 1;
+          const screenWidth = mon.size.width / scale;
+          const screenHeight = mon.size.height / scale;
+          const monX = mon.position.x / scale;
+          const monY = mon.position.y / scale;
+          const w = getCurrentWindow();
+          await w.setPosition(new LogicalPosition(monX, monY));
+          await w.setSize(new LogicalSize(screenWidth, screenHeight));
+        }
+      } catch (err) {
+        console.warn('Canvas expansion error', err);
+      }
+    }
 
     let finished = false;
 
@@ -803,7 +822,86 @@ function EdgeDock() {
       document.body.style.userSelect = '';
     };
 
-    const finishTearOff = async (dropX?: number, dropY?: number) => {
+    const onPointerMove = (ev: PointerEvent) => {
+      if (finished) return;
+      const dist = Math.hypot(ev.screenX - startScreenX, ev.screenY - startScreenY);
+      if (dist > 6) hasMoved = true;
+
+      const deltaX = (ev.screenX - startScreenX) / s;
+      const deltaY = (ev.screenY - startScreenY) / s;
+
+      // Card follows cursor anywhere across the entire monitor!
+      setDragLeft(deltaX);
+      const newTop = baseTop + deltaY;
+      setDragTop(newTop);
+
+      // If user is near the edge dock, reorder slots vertically
+      if (deltaX > -60) {
+        const targetIdx = Math.max(0, Math.min(dockNotes.length - 1, Math.round((newTop - TOP0) / PITCH)));
+        if (targetIdx !== lastIdx) {
+          const item = currentList[lastIdx];
+          currentList.splice(lastIdx, 1);
+          currentList.splice(targetIdx, 0, item);
+          lastIdx = targetIdx;
+          const newOrder = currentList.map(x => x.id);
+          setCustomOrder(newOrder);
+          localStorage.setItem('sidenote_dock_order', JSON.stringify(newOrder));
+        }
+      }
+    };
+
+    const onPointerUp = async (ev: PointerEvent) => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+
+      const deltaX = (ev.screenX - startScreenX) / s;
+
+      // If user simply clicked without moving mouse, keep card open
+      if (!hasMoved) {
+        setDraggingId(null);
+        draggingIdRef.current = null;
+        setDragTop(null);
+        setDragLeft(null);
+        if (native) {
+          await adjustDockWidth(true);
+        }
+        return;
+      }
+
+      // If user pulled note out into the desktop and released (dropped) it:
+      if (deltaX < -50) {
+        const dropX = ev.screenX;
+        const dropY = ev.screenY;
+
+        setDraggingId(null);
+        draggingIdRef.current = null;
+        setDragTop(null);
+        setDragLeft(null);
+        setOpenNoteId(null);
+
+        // Shrink dock back to edge
+        if (native) {
+          await adjustDockWidth(false);
+          isExpandedRef.current = false;
+        }
+
+        showToast('✨ Note placed on desktop');
+        await openFloatingNote(n, dropX, dropY);
+      } else {
+        // User dropped note back inside the dock
+        setDraggingId(null);
+        draggingIdRef.current = null;
+        setDragTop(null);
+        setDragLeft(null);
+
+        if (native) {
+          await adjustDockWidth(true);
+        }
+      }
+    };
+
+    const onCancel = async () => {
       if (finished) return;
       finished = true;
       cleanup();
@@ -811,118 +909,9 @@ function EdgeDock() {
       draggingIdRef.current = null;
       setDragTop(null);
       setDragLeft(null);
-      setIsTearOff(false);
-      setOpenNoteId(null);
-      collapseDock();
-
-      showToast('✨ Note floating on desktop');
-      await openFloatingNote(n, dropX, dropY);
-    };
-
-    const onPointerMove = (ev: PointerEvent) => {
-      if (finished) return;
-      const dist = Math.hypot(ev.clientX - startX, ev.clientY - startY);
-      if (dist > 8) hasMoved = true;
-
-      const deltaX = (ev.clientX - startX) / s;
-      const deltaY = (ev.clientY - startY) / s;
-      const absX = Math.abs(deltaX);
-      const absY = Math.abs(deltaY);
-
-      // Pulling leftwards towards desktop triggers instant seamless tear-off!
-      // This prevents ANY cropped frame since the note becomes a real desktop floating window!
-      if (deltaX < -32 && absX > absY * 0.7) {
-        const mon = (window as any).__TAURI_INTERNALS__ ? null : null;
-        let screenDropX = ev.screenX;
-        let screenDropY = ev.screenY;
-        if (!screenDropX || !screenDropY) {
-          screenDropX = window.screenX + ev.clientX;
-          screenDropY = window.screenY + ev.clientY;
-        }
-        void finishTearOff(screenDropX, screenDropY);
-        return;
+      if (native) {
+        await adjustDockWidth(true);
       }
-
-      // Vertical Up/Down Slot Reordering inside the edge dock
-      setDragLeft(0);
-      const newTop = Math.min(maxTop, Math.max(TOP0 - 30, baseTop + deltaY));
-      setDragTop(newTop);
-
-      const targetIdx = Math.max(0, Math.min(dockNotes.length - 1, Math.round((newTop - TOP0) / PITCH)));
-      if (targetIdx !== lastIdx) {
-        const item = currentList[lastIdx];
-        currentList.splice(lastIdx, 1);
-        currentList.splice(targetIdx, 0, item);
-        lastIdx = targetIdx;
-        const newOrder = currentList.map(x => x.id);
-        setCustomOrder(newOrder);
-        localStorage.setItem('sidenote_dock_order', JSON.stringify(newOrder));
-      }
-    };
-
-    const onPointerUp = async (ev: PointerEvent) => {
-      if (finished) return;
-      const deltaX = (ev.clientX - startX) / s;
-      const absX = Math.abs(deltaX);
-      const absY = Math.abs((ev.clientY - startY) / s);
-
-      if (!hasMoved) {
-        cleanup();
-        setDraggingId(null);
-        draggingIdRef.current = null;
-        setDragTop(null);
-        setDragLeft(null);
-        setIsTearOff(false);
-        void expandDock(n.id);
-        return;
-      }
-
-      // Check if user pulled out past the threshold and released anywhere on the desktop
-      const shouldTearOff = (deltaX < -30) || (deltaX < -50 && absX > absY * 0.6) || ev.clientX < -10;
-
-      if (shouldTearOff) {
-        let dropX: number | undefined;
-        let dropY: number | undefined;
-
-        if (native) {
-          try {
-            const w = getCurrentWindow();
-            const pos = await w.outerPosition();
-            const mon = await currentMonitor();
-            const scale = mon?.scaleFactor || 1;
-            const dockLeft = pos.x / scale;
-            const dockTop = pos.y / scale;
-            dropX = dockLeft + ev.clientX;
-            dropY = dockTop + ev.clientY;
-          } catch {
-            dropX = ev.screenX;
-            dropY = ev.screenY;
-          }
-        } else {
-          dropX = ev.clientX;
-          dropY = ev.clientY;
-        }
-
-        await finishTearOff(dropX, dropY);
-      } else {
-        // Normal reorder or released back near the dock — settle into dock slot
-        cleanup();
-        setDraggingId(null);
-        draggingIdRef.current = null;
-        setDragTop(null);
-        setDragLeft(null);
-        setIsTearOff(false);
-      }
-    };
-
-    const onCancel = () => {
-      if (finished) return;
-      cleanup();
-      setDraggingId(null);
-      draggingIdRef.current = null;
-      setDragTop(null);
-      setDragLeft(null);
-      setIsTearOff(false);
     };
 
     window.addEventListener('pointermove', onPointerMove);
