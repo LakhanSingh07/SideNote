@@ -21,8 +21,8 @@ SideNote is an intelligent, always-nearby notes companion designed with tactile 
 │   └── 5_dark_mode.png                  # High-contrast dark mode aesthetic
 │
 ├── SideNote-Android.apk                 # Installable Android debug APK (3.34 MB)
-├── SideNote-Windows-Setup.exe           # Windows NSIS setup installer (3.01 MB)
-├── SideNote-Windows.msi                 # Windows MSI installation package (5.25 MB)
+├── SideNote-Windows-Setup.exe           # Windows NSIS setup installer (3.08 MB)
+├── SideNote-Windows-Setup.msi           # Windows MSI installation package (4.74 MB)
 ├── SideNote-Android-Final-Source.zip    # Clean Android source archive
 ├── SideNote-Windows-Final-Source.zip    # Clean Windows source archive
 │
