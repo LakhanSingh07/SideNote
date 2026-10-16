@@ -14,6 +14,64 @@ use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 
 struct Database(Arc<Mutex<Connection>>);
 
+#[cfg(windows)]
+struct InstanceGuard(windows_sys::Win32::Foundation::HANDLE);
+#[cfg(windows)]
+impl Drop for InstanceGuard {
+  fn drop(&mut self) { unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0); } }
+}
+
+#[cfg(windows)]
+fn acquire_instance() -> Option<InstanceGuard> {
+  use windows_sys::Win32::{Foundation::{GetLastError, ERROR_ALREADY_EXISTS, CloseHandle}, System::Threading::CreateMutexW, UI::WindowsAndMessaging::{FindWindowW, ShowWindow, SW_SHOWNOACTIVATE}};
+  let name: Vec<u16> = "Local\\in.sidenote.desktop.instance".encode_utf16().chain(Some(0)).collect();
+  unsafe {
+    let handle = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
+    if handle.is_null() { panic!("Cannot acquire SideNote instance lock: {}", GetLastError()); }
+    if GetLastError() == ERROR_ALREADY_EXISTS {
+      CloseHandle(handle);
+      let title: Vec<u16> = "SideNote".encode_utf16().chain(Some(0)).collect();
+      let hwnd = FindWindowW(std::ptr::null(), title.as_ptr());
+      if !hwnd.is_null() { ShowWindow(hwnd, SW_SHOWNOACTIVATE); }
+      return None;
+    }
+    Some(InstanceGuard(handle))
+  }
+}
+
+struct DockHitAreas(Arc<Mutex<Vec<[i32; 4]>>>);
+
+// Hit testing must never clip the WebView's drawing surface. Window regions
+// crop shadows and race with the compositor during card movement.
+#[tauri::command]
+fn set_dock_regions(window: tauri::WebviewWindow, areas: State<'_, DockHitAreas>, rects: Vec<[i32; 4]>) -> Result<(), String> {
+  if window.label() != "main" || rects.len() > 16 { return Err("Invalid dock region".into()); }
+  *areas.0.lock().map_err(|e| e.to_string())? = rects;
+  Ok(())
+}
+
+#[cfg(windows)]
+fn start_dock_hit_testing(window: tauri::WebviewWindow, areas: Arc<Mutex<Vec<[i32; 4]>>>) {
+  std::thread::spawn(move || {
+    use windows_sys::Win32::{Foundation::POINT, Graphics::Gdi::ScreenToClient, UI::WindowsAndMessaging::GetCursorPos};
+    let mut previous = None;
+    loop {
+      let Ok(hwnd) = window.hwnd() else { break; };
+      let mut cursor = POINT { x: 0, y: 0 };
+      unsafe {
+        if GetCursorPos(&mut cursor) != 0 && ScreenToClient(hwnd.0 as _, &mut cursor) != 0 {
+          let inside = areas.lock().map(|rects| rects.iter().any(|[l,t,r,b]|
+            cursor.x >= *l && cursor.x < *r && cursor.y >= *t && cursor.y < *b)).unwrap_or(false);
+          if previous != Some(inside) {
+            if window.set_ignore_cursor_events(!inside).is_ok() { previous = Some(inside); }
+          }
+        }
+      }
+      std::thread::sleep(std::time::Duration::from_millis(8));
+    }
+  });
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all="camelCase")]
 struct Note {
@@ -272,6 +330,8 @@ fn db_path(app:&tauri::App) -> Result<PathBuf,String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run(){
+ #[cfg(windows)]
+ let Some(_instance_guard) = acquire_instance() else { return; };
  tauri::Builder::default()
  .plugin(tauri_plugin_opener::init())
  .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -291,6 +351,10 @@ pub fn run(){
   lan_sync::init_auto_sync(app.handle().clone(), db_arc.clone());
   if let Some(w)=app.get_webview_window("main"){
     let _=w.set_skip_taskbar(true);
+    let areas = Arc::new(Mutex::new(Vec::new()));
+    app.manage(DockHitAreas(areas.clone()));
+    #[cfg(windows)]
+    start_dock_hit_testing(w, areas);
   }
   #[cfg(desktop)]
   {
@@ -334,7 +398,7 @@ pub fn run(){
      }
    }
  })
- .invoke_handler(tauri::generate_handler![lan_generate_key,lan_start_server,lan_sync_peer,lan_get_pairing_pin,local_device_public_key,public_key_fingerprint,trusted_peers,trust_peer,untrust_peer,list_notes,upsert_note,delete_note,save_window_placement,get_window_placement,local_device_id,export_local_changes,export_sync_bundle,import_sync_bundle,list_sync_conflicts,resolve_sync_conflict,set_window_bounds_atomic])
+ .invoke_handler(tauri::generate_handler![lan_generate_key,lan_start_server,lan_sync_peer,lan_get_pairing_pin,local_device_public_key,public_key_fingerprint,trusted_peers,trust_peer,untrust_peer,list_notes,upsert_note,delete_note,save_window_placement,get_window_placement,local_device_id,export_local_changes,export_sync_bundle,import_sync_bundle,list_sync_conflicts,resolve_sync_conflict,set_window_bounds_atomic,set_dock_regions])
  .run(tauri::generate_context!())
  .expect("error while running SideNote");
 }

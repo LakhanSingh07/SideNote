@@ -1,0 +1,13 @@
+{
+    "status":  "PASS",
+    "updatedCopies":  [
+                          "C:\\Users\\lakha\\Desktop\\sidenote-windows.exe",
+                          "C:\\Users\\lakha\\AppData\\Local\\SideNote\\sidenote-windows.exe",
+                          "C:\\Users\\lakha\\Videos\\SideNote-Android-main\\sidenote-windows.exe",
+                          "C:\\Users\\lakha\\Videos\\SideNote-Android-main\\SideNote-Windows-v1.3.2-Acceptance-Kit\\sidenote-windows.exe"
+                      ],
+    "secondLaunchExitCode":  0,
+    "runningInstances":  1,
+    "runningPath":  "C:\\Users\\lakha\\Desktop\\sidenote-windows.exe",
+    "sha256":  "4EF45DE6D4D635097FADC009794DB1D181C3E55760E5856BE4F3159F6C75B057"
+}

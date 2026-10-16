@@ -112,208 +112,80 @@ input, textarea, button {
 /* 1. FIGMA SPECIFIC EDGE DOCK & EXPANDING PEEKING TABS           */
 /* ============================================================== */
 
-/* Frame = the Figma frame (729 wide), anchored to the right edge and scaled to fit the screen height */
+/* Padded, stable canvas. Hit testing is independent of painting. */
 .frame {
-  position: fixed;
-  right: 0;
-  top: 0;
-  width: 729px;
-  height: 1360px;
-  transform-origin: top right;
-  transform: scale(var(--s, 0.6));
-  pointer-events: none;
-  user-select: none;
-  z-index: 1000;
+  position: fixed; right: 0; top: 0; width: 729px; height: 1360px;
+  transform-origin: top right; transform: scale(var(--s, 0.36));
+  pointer-events: none; user-select: none; z-index: 1000;
 }
-
-.dock {
-  display: none !important;
+.dock { display: none !important; }
+.dock-spine {
+  position: absolute; left: 625px; top: 62px; width: 116px; height: 1188px;
+  background: rgba(246, 242, 247, .92); border: 1px solid rgba(255,255,255,.75);
+  border-right: 0; border-radius: 24px 0 0 24px;
+  box-shadow: -5px 8px 18px rgba(43,35,51,.09); pointer-events: none;
 }
-
-@keyframes dockIn {
-  from { transform: translateX(200px); }
+.dock-spine::after {
+  content: ''; position: absolute; left: 28px; right: 24px; top: 950px;
+  height: 2px; background: rgba(105,87,117,.12);
 }
-
-@keyframes tabIn {
-  from { transform: translateX(200px); }
-  to { transform: translateX(0); }
-}
-
 .tab {
-  position: absolute;
-  left: 530px;
-  width: 199px;
-  height: 199px;
-  transition: top 0.35s cubic-bezier(0.2, 0.9, 0.2, 1), transform 0.2s cubic-bezier(0.2, 0.9, 0.2, 1);
-  animation: tabIn 0.7s cubic-bezier(0.34, 1.4, 0.64, 1) backwards;
-  animation-delay: var(--d, 0ms);
-  pointer-events: auto;
-  cursor: pointer;
-  opacity: 1 !important;
-  filter: drop-shadow(-4px 8px 18px rgba(0, 0, 0, 0.28));
+  position: absolute; width: 152px; height: 210px;
+  pointer-events: auto; cursor: grab; transition: top 180ms ease;
 }
-
-.tab:hover:not(.open):not(.dragging) {
-  transform: translateX(-10px);
-}
-
-.frame.is-mounted .tab,
-.frame.is-mounted .fab,
-.frame.is-mounted .folder {
-  animation: none !important;
-}
-
-#tabs.is-dragging .tab {
-  animation: none !important;
-  opacity: 1 !important;
-  transition: top 0.28s cubic-bezier(0.2, 0.9, 0.2, 1) !important;
-}
-
-#tabs.is-dragging .tab.dragging {
-  transition: none !important;
-  animation: none !important;
-  opacity: 1 !important;
-  z-index: 9999 !important;
-  filter: drop-shadow(-14px 26px 48px rgba(0, 0, 0, 0.42));
-}
-
-.tab.dragging .card {
-  width: 474px !important;
-  height: 288px !important;
-  border-radius: 40px 0 0 40px !important;
-  opacity: 1 !important;
-  pointer-events: none !important;
-  transform: scale(0.92) rotate(-2deg);
-  transform-origin: 85% 20%;
-  transition: transform 0.1s ease;
-  box-shadow: 0 0 0 1.5px rgba(138, 75, 255, 0.45), -14px 24px 50px rgba(0, 0, 0, 0.38) !important;
-}
-
-.tab.dragging .in {
-  opacity: 1 !important;
-  pointer-events: none !important;
-}
-
-.tab.dragging svg {
-  transform: scale(0.98);
-  transition: transform 0.1s ease;
-}
-
-
-.tab.gone {
-  opacity: 0;
-  transform: translateX(160px);
-  transition: opacity 0.25s, transform 0.4s, top 0.5s;
-  pointer-events: none;
-}
-
-/* Note written text visible on peeking tabs before hover */
 .tab-preview {
-  position: absolute;
-  left: 44px;
-  top: 32px;
-  width: 140px;
-  height: 135px;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-start;
-  pointer-events: none;
-  opacity: 1;
-  transition: opacity 0.2s cubic-bezier(0.2, 0.9, 0.2, 1);
-  overflow: hidden;
-  color: #2A2830;
-  z-index: 5;
-  padding: 4px 6px;
+  position: absolute; inset: 0; display: flex; align-items: center;
+  flex-direction: column; gap: 12px; padding: 18px 42px 18px 44px;
+  background: linear-gradient(135deg, rgba(255,255,255,.4), rgba(255,255,255,.18)), var(--c);
+  border: 1px solid rgba(95,76,106,.09); border-right: 0; border-radius: 18px 0 0 18px;
+  box-shadow: 0 3px 8px rgba(48,30,56,.07);
+  color: #514858; overflow: hidden; pointer-events: none;
 }
-
-.tab.open .tab-preview {
-  opacity: 0;
-  pointer-events: none;
-}
-
 .tab-preview-title {
-  font-size: 21px;
-  font-weight: 700;
-  line-height: 25px;
-  color: #1F2226;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  margin-bottom: 4px;
+  writing-mode: vertical-rl; text-orientation: mixed;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: 'Segoe UI', sans-serif; font-size: 27px;
+  font-weight: 600; line-height: 38px; letter-spacing: .2px; max-height: 148px;
 }
-
-.tab-preview-body {
-  font-size: 15px;
-  line-height: 20px;
-  color: rgba(31, 34, 38, 0.78);
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  word-break: break-word;
-}
-
-/* popup card: the tab itself grows leftwards (199x199 -> 474x288), tab stays in the panel */
+.tab-note-icon { flex: none; color: rgba(81,72,88,.48); }
+.tab-preview-body { display: none; }
+.tab.open .tab-preview { box-shadow: inset 5px 0 rgba(91,70,110,.28), 0 3px 8px rgba(48,30,56,.07); }
+.tab.dragging .tab-preview { display: none; }
+.tab.open, .tab.dragging { z-index: 100; }
+#tabs.is-dragging .tab.dragging { transition: none; cursor: grabbing; }
 .card {
-  position: absolute;
-  right: 0;
-  top: 0;
-  width: 199px;
-  height: 199px;
-  border-radius: 23px 0 0 23px;
-  background: var(--c);
-  overflow: hidden;
-  opacity: 0;
-  pointer-events: none;
-  transition: width 0.32s cubic-bezier(0.34, 1.25, 0.64, 1),
-              height 0.32s cubic-bezier(0.34, 1.25, 0.64, 1),
-              border-radius 0.28s,
-              box-shadow 0.28s,
-              opacity 0.1s 0.22s;
+  display: none; position: absolute; right: 182px; top: 0;
+  width: 650px; height: 390px; border-radius: 24px;
+  background: linear-gradient(135deg, rgba(255,255,255,.48), rgba(255,255,255,.22)), var(--c);
+  border: 1px solid rgba(95,76,106,.1);
+  box-shadow: 0 12px 28px rgba(43,35,51,.16);
+  overflow: hidden; pointer-events: none;
 }
-
-.tab.open .card {
-  width: 474px;
-  height: 288px;
-  border-radius: 42px 0 0 42px;
-  opacity: 1;
+.tab.open .card, .tab.dragging .card { display: block; pointer-events: auto; }
+.tab.dragging .card { pointer-events: none; }
+/* The invisible bridge keeps the flyout open while crossing its 11px gutter. */
+.dock-popup-bridge { display: none; }
+.tab.open:not(.dragging) .dock-popup-bridge {
+  display: block; position: absolute; right: 152px; top: 0; width: 30px; height: 210px;
   pointer-events: auto;
-  box-shadow: -10px 18px 44px rgba(0, 0, 0, 0.26);
-  transition: width 0.32s cubic-bezier(0.34, 1.25, 0.64, 1),
-              height 0.32s cubic-bezier(0.34, 1.25, 0.64, 1),
-              border-radius 0.28s,
-              box-shadow 0.28s,
-              opacity 0s;
 }
-
-.tab.dragging .card {
-  box-shadow: -14px 30px 60px rgba(0, 0, 0, 0.34);
-}
-
 .in {
-  position: absolute;
-  right: 0;
-  top: 0;
-  width: 474px;
-  height: 288px;
-  padding: 26px 36px 24px 30px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  opacity: 0;
-  transition: opacity 0.15s;
+  position: absolute; inset: 0; padding: 30px 34px; display: flex;
+  flex-direction: column; gap: 22px;
 }
-
-.tab.open .in {
-  opacity: 1;
-  transition: opacity 0.3s 0.14s;
-}
+.frame .txt { font-family: 'Segoe UI', sans-serif; font-size: 31px; line-height: 43px; color: #403b45; }
 
 .card-top-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   width: 100%;
+}
+
+.dock-card-title {
+  min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; font-size: 28px; font-weight: 700; color: #66506d;
 }
 
 .grip {
@@ -406,67 +278,21 @@ input, textarea, button {
   opacity: 0.4;
 }
 
-.fab {
-  position: absolute;
-  left: 604px;
-  top: 1040px;
-  width: 90px;
-  height: 90px;
-  border-radius: 50%;
-  border: 0;
-  background: #8B4CFF;
-  color: #fff;
-  cursor: pointer;
-  display: grid;
-  place-items: center;
-  box-shadow: 0 6px 28px 4px rgba(139, 76, 255, 0.32);
-  animation: tabIn 0.7s cubic-bezier(0.34, 1.4, 0.64, 1) 0.9s backwards;
-  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
-  pointer-events: auto;
+/* Footer controls share the tabs' left edge, width, corners and icon style. */
+.fab, .folder {
+  position: absolute; left: 639px; width: 90px; height: 90px;
+  border-radius: 18px 0 0 18px; border: 1px solid rgba(95,76,106,.1); border-right: 0;
+  display: grid; place-items: center; pointer-events: auto; cursor: pointer;
+  color: #746181; box-shadow: none;
+  transition: background 120ms ease;
 }
-
-.fab svg {
-  transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-
-.fab:hover {
-  transform: scale(1.07);
-}
-
-.fab:hover svg {
-  transform: rotate(90deg);
-}
-
-.fab:active {
-  transform: scale(0.93);
-}
-
-.folder {
-  position: absolute;
-  left: 608px;
-  top: 1152px;
-  width: 82px;
-  height: 78px;
-  border-radius: 24px;
-  border: 0;
-  background: #F4F2EC;
-  color: #6B7280;
-  cursor: pointer;
-  display: grid;
-  place-items: center;
-  animation: tabIn 0.7s cubic-bezier(0.34, 1.4, 0.64, 1) 1s backwards;
-  transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
-  pointer-events: auto;
-}
-
-.folder:hover {
-  transform: translateY(-4px) scale(1.04);
-  color: #1F2226;
-}
-
-.folder:active {
-  transform: scale(0.94);
-}
+.fab { top: 1034px; background: #8B4CFF; color: #fff; }
+.folder { top: 1140px; background: #efE9f3; }
+.fab svg, .folder svg { width: 44px; height: 44px; }
+.fab:hover, .folder:hover { background: #d9caea; }
+.fab:active, .folder:active { background: #ccb9e2; }
+.fab:hover { background: #7835FF; }
+.fab:active { background: #6B2DE0; }
 
 .toast {
   position: fixed;

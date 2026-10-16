@@ -598,6 +598,7 @@ function EdgeDock() {
   // Anti-glitch state refs & mutex
   const isExpandedRef = useRef(false);
   const isBusyRef = useRef(false);
+  const dockBoundsRef = useRef('');
   const collapseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isMounted, setIsMounted] = useState(false);
 
@@ -620,6 +621,36 @@ function EdgeDock() {
   const [dragLeft, setDragLeft] = useState<number | null>(null);
   const [isTearOff, setIsTearOff] = useState(false);
 
+  useEffect(() => {
+    if (!native) return;
+    let stopped = false;
+    let frame = 0;
+    let previous = '';
+    const updateRegion = async () => {
+      const scale = window.devicePixelRatio || 1;
+      const elements = document.querySelectorAll<HTMLElement>(
+        '.tab:not(.dragging), .tab.open .card, .tab.open:not(.dragging) .dock-popup-bridge, .tab.dragging .card, .fab, .folder, .toast'
+      );
+      const rects = Array.from(elements).map(el => {
+        const r = el.getBoundingClientRect();
+        return [Math.floor(r.left * scale), Math.floor(r.top * scale),
+          Math.ceil(r.right * scale), Math.ceil(r.bottom * scale)];
+      });
+      // Keep the captured drag surface intact until pointerup/cancel.
+      if (draggingIdRef.current) rects.push([0, 0, Math.ceil(innerWidth * scale), Math.ceil(innerHeight * scale)]);
+      const signature = JSON.stringify([innerWidth, innerHeight, rects]);
+      if (signature !== previous) {
+        try {
+          await invoke('set_dock_regions', { rects });
+          previous = signature;
+        } catch (error) { console.warn('Dock hit region error', error); }
+      }
+      if (!stopped) frame = requestAnimationFrame(updateRegion);
+    };
+    frame = requestAnimationFrame(updateRegion);
+    return () => { stopped = true; cancelAnimationFrame(frame); };
+  }, []);
+
   // Stable scale strictly based on monitor screen display height (never distorted by window resizing or full-screen drag canvas)
   useEffect(() => {
     const applyStableScale = async () => {
@@ -638,7 +669,7 @@ function EdgeDock() {
       const s = Math.min(0.46, Math.max(0.36, (targetHeight - 24) / 1340));
       document.documentElement.style.setProperty('--s', String(s));
       if (frameRef.current) {
-        const topOffset = Math.max(4, Math.round((screenH * 0.58 - 1340 * s) / 2));
+        const topOffset = Math.round((screenH - targetHeight) / 2) + Math.max(4, Math.round((screenH * 0.58 - 1340 * s) / 2));
         frameRef.current.style.top = `${topOffset}px`;
       }
     };
@@ -664,36 +695,28 @@ function EdgeDock() {
   }, [notes]);
 
   // Smooth OS window sizing with zero tear & zero flicker (Atomic Win32 SetWindowPos)
-  const adjustDockWidth = async (isOpen: boolean) => {
+  const adjustDockWidth = async (_isOpen: boolean) => {
     if (!native) return;
     try {
       const mon = await currentMonitor();
       if (!mon) return;
       const scale = mon.scaleFactor || 1;
-      const screenWidth = mon.size.width / scale;
-      const screenHeight = mon.size.height / scale;
+      // One transparent monitor canvas from startup through hover and drag.
+      // Native hit testing passes empty pixels through to other applications.
+      const physW = mon.size.width;
+      const physH = mon.size.height;
+      const physX = mon.position.x;
+      const physY = mon.position.y;
 
-      // Safe dock height matching 58% display height
-      const targetHeight = Math.max(420, Math.round(screenHeight * 0.58));
-      const s = Math.min(0.46, Math.max(0.36, (targetHeight - 24) / 1340));
-      const minOpenW = Math.round(580 * s);
-      const openWidth = Math.max(minOpenW, Math.round(760 * s * widthFactor));
-      // When collapsed, width strictly matches peeking tabs (192 * s ~ 80px) so desktop behind is 100% clickable
-      const collapsedWidth = Math.round(192 * s);
-      const targetWidth = isOpen ? Math.max(openWidth, collapsedWidth) : collapsedWidth;
-
-      // Win32 SetWindowPos expects physical device pixels: convert logical to physical
-      const physW = Math.round(targetWidth * scale);
-      const physH = Math.round(targetHeight * scale);
-      const physX = mon.position.x + mon.size.width - physW;
-      const physY = mon.position.y + Math.round((mon.size.height - physH) / 2);
-
+      const bounds = `${physX},${physY},${physW},${physH}`;
+      if (dockBoundsRef.current === bounds) return;
       await invoke('set_window_bounds_atomic', {
         x: physX,
         y: physY,
         width: physW,
         height: physH,
       });
+      dockBoundsRef.current = bounds;
     } catch (e) {
       console.warn('Dock move error', e);
     }
@@ -712,10 +735,10 @@ function EdgeDock() {
     if (isBusyRef.current) return;
     isBusyRef.current = true;
     try {
-      // 1. Expand OS window bounds first with SWP_NOCOPYBITS so full width is available
+      // Ensure the padded surface is restored after any desktop drag.
       await adjustDockWidth(true);
       isExpandedRef.current = true;
-      // 2. Open the note card cleanly without clipped double/ghost frames
+      // Switch to the card on the same drawing surface.
       if (noteIdToOpen) {
         setOpenNoteId(noteIdToOpen);
       }
@@ -737,10 +760,10 @@ function EdgeDock() {
       // 1. Fold card back into tab
       setOpenNoteId(null);
 
-      // 2. Shrink window back to narrow width after card finishes folding (~200ms)
-      setTimeout(async () => {
+      // Restore normal bounds if a desktop drag changed the canvas.
+      collapseTimerRef.current = setTimeout(async () => {
+        collapseTimerRef.current = null;
         if (draggingIdRef.current) return;
-        if (collapseTimerRef.current) return; // Pointer re-entered
         isBusyRef.current = true;
         try {
           await adjustDockWidth(false);
@@ -806,8 +829,8 @@ function EdgeDock() {
       .slice(0, 4);
   }, [notes, customOrder]);
 
-  const TOP0 = 138;
-  const PITCH = (769 - 138) / 3;
+  const TOP0 = 80;
+  const PITCH = 236;
   const slot = (i: number) => TOP0 + i * PITCH;
 
   const draggingIdRef = useRef<string | null>(null);
@@ -828,6 +851,8 @@ function EdgeDock() {
 
     setDraggingId(n.id);
     draggingIdRef.current = n.id;
+    if (collapseTimerRef.current) clearTimeout(collapseTimerRef.current);
+    collapseTimerRef.current = null;
     const baseTop = slot(currentIdx);
     setDragTop(baseTop);
     setDragLeft(0);
@@ -842,36 +867,7 @@ function EdgeDock() {
 
     document.body.style.userSelect = 'none';
 
-    // Temporarily expand dock window to cover the screen so dragging has 100% full-screen canvas with zero cropping
-    let restoreTopOffset = 9;
-    if (native) {
-      try {
-        const mon = await currentMonitor();
-        if (mon) {
-          const scale = mon.scaleFactor || 1;
-          const screenHeight = mon.size.height / scale;
-          const targetHeight = Math.max(420, Math.round(screenHeight * 0.58));
-          const targetY = Math.round((screenHeight - targetHeight) / 2);
-          const topOffset = Math.max(4, Math.round((screenHeight * 0.58 - 1340 * s) / 2));
-          restoreTopOffset = topOffset;
-
-          // Compensate frame top so dock remains 100% stationary on monitor when window expands to y=0
-          if (frameRef.current) {
-            frameRef.current.style.top = `${targetY + topOffset}px`;
-          }
-
-          await invoke('set_window_bounds_atomic', {
-            x: mon.position.x,
-            y: mon.position.y,
-            width: mon.size.width,
-            height: mon.size.height,
-          });
-        }
-      } catch (err) {
-        console.warn('Canvas expansion error', err);
-      }
-    }
-
+    // Keep the drawing canvas fixed; only this note moves.
     let finished = false;
 
     const cleanup = () => {
@@ -881,10 +877,9 @@ function EdgeDock() {
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
       window.removeEventListener('pointercancel', onCancel);
+      window.removeEventListener('blur', onCancel);
+      targetEl.removeEventListener('lostpointercapture', onCancel);
       document.body.style.userSelect = '';
-      if (frameRef.current) {
-        frameRef.current.style.top = `${restoreTopOffset}px`;
-      }
     };
 
     const onPointerMove = (ev: PointerEvent) => {
@@ -928,6 +923,8 @@ function EdgeDock() {
         draggingIdRef.current = null;
         setDragTop(null);
         setDragLeft(null);
+        setOpenNoteId(n.id);
+        isExpandedRef.current = true;
         if (native) {
           await adjustDockWidth(true);
         }
@@ -946,9 +943,9 @@ function EdgeDock() {
         setOpenNoteId(null);
 
         // Shrink dock back to edge
+        isExpandedRef.current = false;
         if (native) {
           await adjustDockWidth(false);
-          isExpandedRef.current = false;
         }
 
         showToast('✨ Note placed on desktop');
@@ -986,6 +983,9 @@ function EdgeDock() {
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
     window.addEventListener('pointercancel', onCancel);
+    window.addEventListener('blur', onCancel);
+    targetEl.addEventListener('lostpointercapture', onCancel);
+
   };
 
   const handleCreateNew = async () => {
@@ -1024,9 +1024,11 @@ function EdgeDock() {
         id="frame"
         onPointerEnter={() => {
           if (collapseTimerRef.current) clearTimeout(collapseTimerRef.current);
+          collapseTimerRef.current = null;
         }}
         onPointerLeave={collapseDock}
       >
+        <div className="dock-spine" aria-hidden="true" />
         <div id="tabs" className={draggingId ? 'is-dragging' : ''}>
           {dockNotes.map((n, idx) => {
             const isOpen = openNoteId === n.id;
@@ -1040,7 +1042,8 @@ function EdgeDock() {
                 className={`tab ${isOpen ? 'open' : ''} ${isDragging ? 'dragging' : ''} ${isDragging && isTearOff ? 'tearing-off' : ''}`}
                 style={{
                   top: isDragging && dragTop !== null ? `${dragTop}px` : `${slot(idx)}px`,
-                  left: isDragging && dragLeft !== null ? `${530 + dragLeft}px` : '530px',
+                  left: isDragging && dragLeft !== null ? `${607 + dragLeft}px` : '607px',
+                  ['--c' as any]: col,
                   ['--d' as any]: `${350 + idx * 90}ms`,
                   zIndex: isDragging ? 100 : (isOpen ? 20 : 1),
                 }}
@@ -1057,23 +1060,16 @@ function EdgeDock() {
                   if (!draggingIdRef.current) void expandDock(n.id);
                 }}
               >
-                <svg width="199" height="199">
-                  <SvgShadow />
-                  <SvgShape colorIndex={noteColorIdx} />
-                </svg>
-
-                {/* Note written text visible on peeking tabs */}
+                {/* Title-only paper tabs share one edge and one footer. */}
                 <div className="tab-preview">
+                  <StickyNote className="tab-note-icon" size={30} strokeWidth={1.5} aria-hidden="true" />
                   <div className="tab-preview-title">
                     {(n.title.trim() || (n.body ? n.body.split('\n')[0].replace(/^\[[ x]\]\s*/i, '').slice(0, 24) : 'Note')).replace(/[*_#`~]/g, '')}
                   </div>
-                  {n.body && (
-                    <div className="tab-preview-body">
-                      {(n.title.trim() ? n.body : n.body.split('\n').slice(1).join(' ')).replace(/\n/g, ' ').replace(/[*_#`~]/g, '').replace(/\[[ x]\]/gi, '• ')}
-                    </div>
-                  )}
+
                 </div>
 
+                <div className="dock-popup-bridge" />
                 <div className="card" style={{ ['--c' as any]: col }}>
                   <div className="in">
                     <div
@@ -1097,6 +1093,7 @@ function EdgeDock() {
                         <i /><i /><i />
                       </div>
 
+                      <span className="dock-card-title">{n.title.trim() || 'Little note'}</span>
                       <div className="card-actions">
                         <button
                           type="button"
