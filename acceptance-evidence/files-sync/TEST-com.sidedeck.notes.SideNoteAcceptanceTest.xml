@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.sidedeck.notes.SideNoteAcceptanceTest" tests="15" skipped="0" failures="0" errors="0" timestamp="2026-10-16T10:38:06" hostname="LAKHANSINGH" time="2.135">
+  <properties/>
+  <testcase name="testTextHistoryManagerUndoRedo" classname="com.sidedeck.notes.SideNoteAcceptanceTest" time="0.078"/>
+  <testcase name="testBackupExportAndImportRoundTrip" classname="com.sidedeck.notes.SideNoteAcceptanceTest" time="0.213"/>
+  <testcase name="testRichTextFormattingBoldItalicHeading" classname="com.sidedeck.notes.SideNoteAcceptanceTest" time="0.55"/>
+  <testcase name="testCorruptNoteEntryPreservesData" classname="com.sidedeck.notes.SideNoteAcceptanceTest" time="0.077"/>
+  <testcase name="testBackupImportRejectsMissingAndNullFields" classname="com.sidedeck.notes.SideNoteAcceptanceTest" time="0.063"/>
+  <testcase name="testBackupImportRejectsDuplicateIds" classname="com.sidedeck.notes.SideNoteAcceptanceTest" time="0.074"/>
+  <testcase name="testAutosaveUpdateAndDeletion" classname="com.sidedeck.notes.SideNoteAcceptanceTest" time="0.168"/>
+  <testcase name="testReminderSchedulingAndCancel" classname="com.sidedeck.notes.SideNoteAcceptanceTest" time="0.152"/>
+  <testcase name="testNoteOrderingPinnedAndRecency" classname="com.sidedeck.notes.SideNoteAcceptanceTest" time="0.163"/>
+  <testcase name="testOverlayPreferencesPersistence" classname="com.sidedeck.notes.SideNoteAcceptanceTest" time="0.108"/>
+  <testcase name="testCorruptDatabaseSyntaxPreservesData" classname="com.sidedeck.notes.SideNoteAcceptanceTest" time="0.071"/>
+  <testcase name="testOversizedNoteInStoreThrows" classname="com.sidedeck.notes.SideNoteAcceptanceTest" time="0.084"/>
+  <testcase name="testNoteParsingAndFields" classname="com.sidedeck.notes.SideNoteAcceptanceTest" time="0.107"/>
+  <testcase name="testMultiWindowFloatingCardStateIndependence" classname="com.sidedeck.notes.SideNoteAcceptanceTest" time="0.088"/>
+  <testcase name="testBootReschedulesPendingReminders" classname="com.sidedeck.notes.SideNoteAcceptanceTest" time="0.138"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

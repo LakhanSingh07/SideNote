@@ -1,0 +1,29 @@
+{
+  "passed": 24,
+  "checks": [
+    "Legacy checkbox Markdown becomes two real checkboxes",
+    "Existing bold italic and HTML underline display correctly",
+    "Clicking task saves checked state",
+    "Checkbox state survives reload",
+    "Bold toolbar formats selection",
+    "Combined bold italic underline formats selected text",
+    "Combined marks survive Markdown save and reload",
+    "Heading toggles paragraph",
+    "Bullet list toggles",
+    "Numbered list toggles",
+    "Checklist toggles existing paragraph",
+    "Enter creates next checklist row",
+    "Link dialog keeps selection and normalizes URL",
+    "Clicking link passes safe URL to native opener",
+    "Links survive Markdown save and reload",
+    "Editing a link from its cursor selects the complete label",
+    "Updating existing link preserves surrounding text",
+    "Unsafe link rejected with feedback",
+    "Undo reverses formatting",
+    "Redo restores formatting",
+    "Ctrl+B formats newly typed text",
+    "Timestamp inserts real text",
+    "Mixed paragraph tasks and bullets survive reload",
+    "Editor has no mode switches"
+  ]
+}

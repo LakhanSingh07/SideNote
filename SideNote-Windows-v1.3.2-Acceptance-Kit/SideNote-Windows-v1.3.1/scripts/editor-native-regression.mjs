@@ -1,0 +1,60 @@
+import assert from 'node:assert/strict';
+import {mkdir,writeFile} from 'node:fs/promises';
+const pages=await(await fetch('http://127.0.0.1:9223/json/list')).json();
+const page=pages.find(p=>p.type==='page'&&!p.url.includes('view='));
+assert.ok(page,'Dock WebView required');
+const socket=new WebSocket(page.webSocketDebuggerUrl);
+await new Promise((resolve,reject)=>{socket.onopen=resolve;socket.onerror=reject});
+let seq=0; const pending=new Map();
+socket.onmessage=e=>{const m=JSON.parse(e.data),p=pending.get(m.id);if(p){pending.delete(m.id);m.error?p.reject(m.error):p.resolve(m.result)}};
+const call=(method,params={})=>new Promise((resolve,reject)=>{const id=++seq;pending.set(id,{resolve,reject});socket.send(JSON.stringify({id,method,params}))});
+const evaluate=async expression=>{const r=await call('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});assert.ok(!r.exceptionDetails,JSON.stringify(r.exceptionDetails));return r.result.value};
+const delay=ms=>new Promise(r=>setTimeout(r,ms));
+
+import { randomUUID } from 'node:crypto';
+const id=randomUUID(); const checks=[]; let floatSocket;
+const originalOrder=await evaluate("localStorage.getItem('sidenote_dock_order')");
+const originalPlacement=await evaluate("Object.keys(localStorage)");
+const native=expression=>evaluate(`window.__TAURI_INTERNALS__.invoke${expression}`);
+const stored=async()=>{const notes=await native("('list_notes')");return notes.find(n=>n.id===id)};
+const waitFor=async(predicate,label)=>{for(let i=0;i<50;i++){if(await predicate())return;await delay(100)}assert.fail(label)};
+try {
+ await native(`('upsert_note',{note:${JSON.stringify({id,title:'Editor regression temporary',body:'[ ] Editor test task\n\nEditable words',color:1,isChecklist:true,updatedAt:Date.now(),pinned:false,archived:false,reminderAt:0})}})`);
+ await evaluate(`localStorage.setItem('sidenote_dock_order',JSON.stringify([${JSON.stringify(id)},...JSON.parse(localStorage.getItem('sidenote_dock_order')||'[]')]))`);
+ await call('Page.reload');await delay(1300);
+ await evaluate(`document.querySelector('.tab').dispatchEvent(new PointerEvent('pointerover',{bubbles:true,pointerId:1,pointerType:'mouse'}))`);await delay(500);
+ assert.equal(await evaluate(`document.querySelector('.tab.open .dock-card-title').textContent.trim()`),'Editor regression temporary');
+ await evaluate(`document.querySelector('.tab.open input[type=checkbox]').click()`);
+ await waitFor(async()=> (await stored()).body.includes('[x] Editor test task'),'Popup task tick must persist to SQLite');checks.push('Popup checkbox click persists to SQLite');
+ await evaluate(`(()=>{const el=document.querySelector('.tab.open .note-editor-content');el.focus();const text=el.querySelector('p').firstChild;const range=document.createRange();range.setStart(text,0);range.setEnd(text,6);const selection=getSelection();selection.removeAllRanges();selection.addRange(range)})()`);await delay(100);
+ await evaluate(`[...document.querySelectorAll('.tab.open button')].find(b=>b.title==='Bold (Ctrl+B)').click()`);
+ await waitFor(async()=> (await stored()).body.includes('**Editor**'),'Popup formatting must persist');checks.push('Popup selected text formats and saves');
+ const shot=await call('Page.captureScreenshot',{format:'png',clip:{x:Math.max(0,await evaluate('innerWidth')-380),y:Math.max(0,await evaluate("document.querySelector('.frame').getBoundingClientRect().top")-10),width:380,height:700,scale:1}});
+ await mkdir('acceptance-evidence/editor',{recursive:true});await writeFile('acceptance-evidence/editor/popup.png',Buffer.from(shot.data,'base64'));
+ await evaluate(`document.querySelector('.tab.open button[title="Float note on desktop"]').click()`);await delay(1200);
+ const floatPage=(await(await fetch('http://127.0.0.1:9223/json/list')).json()).find(p=>p.url.includes(id));assert.ok(floatPage,'Floating editor window opens');
+ floatSocket=new WebSocket(floatPage.webSocketDebuggerUrl);await new Promise((r,j)=>{floatSocket.onopen=r;floatSocket.onerror=j});
+ let next=0;const waiters=new Map();floatSocket.onmessage=e=>{const m=JSON.parse(e.data),p=waiters.get(m.id);if(p){waiters.delete(m.id);m.error?p.reject(m.error):p.resolve(m.result)}};
+ const floatCall=(method,params={})=>new Promise((resolve,reject)=>{const id=++next;waiters.set(id,{resolve,reject});floatSocket.send(JSON.stringify({id,method,params}))});
+ const feval=async expression=>{const r=await floatCall('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});assert.ok(!r.exceptionDetails,JSON.stringify(r.exceptionDetails));return r.result.value};
+ await waitFor(()=>feval("!!document.querySelector('.note-editor-content')"),'Floating editor loads');
+ assert.equal(await feval("document.querySelector('input[type=checkbox]').checked"),true);checks.push('Floating editor opens saved popup checkbox and formatting');
+ assert.equal(await feval("!!document.querySelector('.note-editor-content strong')"),true);
+ await feval(`(()=>{const el=document.querySelector('.sticky-title-input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(el,'Editor regression updated');el.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+ await feval(`document.querySelectorAll('.color-swatch-dot')[2].click();document.querySelector('input[type=checkbox]').click()`);
+ await waitFor(async()=>{const n=await stored();return n.title==='Editor regression updated'&&n.color===2&&n.body.includes('[ ] **Editor**')},'Rapid title, color, body saves preserve each other');checks.push('Rapid title color and checklist changes preserve all fields');
+ await feval(`(()=>{const el=document.querySelector('.note-editor-content');el.focus();const text=el.querySelector('p strong').firstChild;const range=document.createRange();range.selectNodeContents(text);const sel=getSelection();sel.removeAllRanges();sel.addRange(range)})()`);await delay(100);
+ await feval(`[...document.querySelectorAll('button')].find(b=>b.title==='Italic (Ctrl+I)').click()`);
+ await waitFor(async()=> /\*\*\*Editor\*\*\*/.test((await stored()).body),'Floating editor saves italic combined with bold');checks.push('Full editor formats selected text and persists combined marks');
+ const floatingShot=await floatCall('Page.captureScreenshot',{format:'png'});await writeFile('acceptance-evidence/editor/floating.png',Buffer.from(floatingShot.data,'base64'));
+ assert.equal(await feval("document.body.textContent.includes('Rich View')||document.body.textContent.includes('Edit Mode')"),false);checks.push('No Edit/Rich mode switch remains');
+ await feval(`document.querySelector('button[title="Close note window"]').click()`);await delay(300);floatSocket.close();floatSocket=null;
+ await call('Page.reload');await delay(1000);await evaluate(`document.querySelector('.tab').dispatchEvent(new PointerEvent('pointerover',{bubbles:true,pointerId:1,pointerType:'mouse'}))`);await delay(350);
+ assert.equal(await evaluate("document.querySelector('.tab.open .note-editor-content strong em, .tab.open .note-editor-content em strong')!==null"),true);checks.push('Reopening popup reads saved full-editor formatting');
+ await writeFile('acceptance-evidence/editor/native-results.json',JSON.stringify({passed:checks.length,checks},null,2));console.log(JSON.stringify({passed:checks.length,checks},null,2));
+} finally {
+ if(floatSocket){try{floatSocket.close()}catch{}}
+ await native(`('delete_note',{id:${JSON.stringify(id)}})`);
+ await evaluate(`(()=>{const original=${JSON.stringify(originalOrder)};if(original===null)localStorage.removeItem('sidenote_dock_order');else localStorage.setItem('sidenote_dock_order',original);for(const key of Object.keys(localStorage)){if(key.includes(${JSON.stringify(id)})&&!${JSON.stringify(originalPlacement)}.includes(key))localStorage.removeItem(key)}})()`);
+ await call('Page.reload');socket.close();
+}

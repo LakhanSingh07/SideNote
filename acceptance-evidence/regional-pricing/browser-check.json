@@ -1,0 +1,12 @@
+{
+  "syntheticPlansOnly": true,
+  "realPaymentAttempted": false,
+  "checks": [
+    "INR prices for India",
+    "USD prices for other regions",
+    "billing region remembered",
+    "selected region preserved in checkout",
+    "monthly and yearly checkout paths"
+  ],
+  "passed": true
+}

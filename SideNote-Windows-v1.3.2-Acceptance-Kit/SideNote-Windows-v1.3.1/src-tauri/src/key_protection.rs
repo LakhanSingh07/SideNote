@@ -30,18 +30,18 @@ pub fn load_identity(c:&Connection)->Result<DeviceIdentity,String>{
 }
 
 #[cfg(windows)]
-fn protect_hex(seed:&str)->Result<String,String>{
+pub(crate) fn protect_hex(seed:&str)->Result<String,String>{
     Ok(hex::encode(dpapi(hex::decode(seed).map_err(|_|"Invalid seed".to_string())?.as_slice(),true)?))
 }
 #[cfg(windows)]
-fn unprotect_hex(data:&str)->Result<String,String>{
+pub(crate) fn unprotect_hex(data:&str)->Result<String,String>{
     Ok(hex::encode(dpapi(&hex::decode(data).map_err(|_|"Invalid protected identity".to_string())?,false)?))
 }
 
 #[cfg(not(windows))]
-fn protect_hex(_seed:&str)->Result<String,String>{Err("Windows DPAPI is required for protected identity storage".into())}
+pub(crate) fn protect_hex(_seed:&str)->Result<String,String>{Err("Windows DPAPI is required for protected identity storage".into())}
 #[cfg(not(windows))]
-fn unprotect_hex(_data:&str)->Result<String,String>{Err("Windows DPAPI is required for protected identity storage".into())}
+pub(crate) fn unprotect_hex(_data:&str)->Result<String,String>{Err("Windows DPAPI is required for protected identity storage".into())}
 
 #[cfg(windows)]
 fn dpapi(data:&[u8],encrypt:bool)->Result<Vec<u8>,String>{

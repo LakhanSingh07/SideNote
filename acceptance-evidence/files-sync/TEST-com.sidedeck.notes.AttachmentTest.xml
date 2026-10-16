@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.sidedeck.notes.AttachmentTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-10-16T10:38:02" hostname="LAKHANSINGH" time="4.588">
+  <properties/>
+  <testcase name="rejectPathsOutsidePrivateBlobDirectory" classname="com.sidedeck.notes.AttachmentTest" time="2.54"/>
+  <testcase name="emptyFileCompletesWithCorrectHash" classname="com.sidedeck.notes.AttachmentTest" time="0.104"/>
+  <testcase name="corruptPartialIsNotPublished" classname="com.sidedeck.notes.AttachmentTest" time="0.067"/>
+  <testcase name="hashAndCompleteAResumedBinaryDownload" classname="com.sidedeck.notes.AttachmentTest" time="0.084"/>
+  <testcase name="attachmentScreenUsesSystemPickerForAllFileTypes" classname="com.sidedeck.notes.AttachmentTest" time="1.791"/>
+  <system-out><![CDATA[WARNING: No manifest file found at .\AndroidManifest.xml.
+Falling back to the Android OS resources only.
+To remove this warning, annotate your test class with @Config(manifest=Config.NONE).
+If you're using Android Gradle Plugin, add testOptions.unitTests.includeAndroidResources = true to your build.gradle
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

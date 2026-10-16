@@ -1,0 +1,30 @@
+{
+  "device": "OnePlus 10T CPH2413",
+  "androidVersion": 15,
+  "connection": "Wi-Fi, real paired apps",
+  "eachDirectionBytes": 12582912,
+  "androidToWindowsSha256": "732856efc1e2ebd7e86e7c9dfa914c211b869cda2553dfc2be0b9b2565593d21",
+  "windowsToAndroidSha256": "19605eada71e43cbb5cdda64493a1ad016026089f0a1b32ec4a24ba4586061ba",
+  "independentHashesMatchedOnBothDevices": true,
+  "noteCreationBothDirections": true,
+  "noteEditingBothDirections": true,
+  "noteDeletionBothDirections": true,
+  "androidSystemPicker": true,
+  "androidSaveAsReceivedFileHashMatched": true,
+  "manualPinPairing": true,
+  "legacyDeletedNotesNoLongerReappear": true,
+  "temporaryNotesAndGeneratedFilesRemoved": true,
+  "originalNoteIdsRetained": true,
+  "finalNoteCountEachDevice": 17,
+  "finalNoteTitlesBodiesAttachmentsMatch": true,
+  "existingNoteBodiesChangedDuringSession": 1,
+  "existingNoteChangesPreserved": true,
+  "physicalPeerLeftPaired": true,
+  "rustTestsPassed": 22,
+  "androidTestsPassed": 40,
+  "speedBenchmark": false,
+  "artifactSha256": {
+    "sidenote-windows.exe": "588d3fc84b7000ff06892e83b1d8a3f76f7cf12aa139737ea5070aef8c79ce0f",
+    "SideNote-Android-v3.1.0.apk": "fce4543233794030eb01389a0336d4c2a977aeb8f1526099ad0323c7df28a067"
+  }
+}

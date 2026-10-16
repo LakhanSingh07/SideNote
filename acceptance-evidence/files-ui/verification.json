@@ -1,0 +1,19 @@
+{
+  "androidTestsPassed": 40,
+  "optInInteropSkipped": 1,
+  "device": "OnePlus 10T, Android 15",
+  "lightAndDarkScreensInspected": true,
+  "systemPickerImports": [
+    "PDF",
+    "PNG",
+    "ZIP"
+  ],
+  "transferStatusOnBothDevicesObserved": true,
+  "menuActions": [
+    "Save as",
+    "Remove from note"
+  ],
+  "apkSha256": "84c1076cc3a9d40d23e408582f38831fe7d6ffe790ebc764be643ceeba44a1d0",
+  "removeConfirmationPassed": true,
+  "temporaryNoteDeletedOnBothDevices": true
+}

@@ -1,3 +1,10 @@
+mod pro;
+mod app_updates;
+mod file_shelf;
+mod recovery;
+mod file_dialog;
+mod secure_lan;
+mod attachments;
 mod sync_bundle;
 mod lan_sync;
 mod device_identity;
@@ -72,15 +79,43 @@ fn start_dock_hit_testing(window: tauri::WebviewWindow, areas: Arc<Mutex<Vec<[i3
   });
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all="camelCase")]
 struct Note {
   id: String, title: String, body: String, color: i64,
-  is_checklist: bool, updated_at: i64, pinned: bool, archived: bool, reminder_at: i64,
+  #[serde(alias="checklist")] is_checklist: bool, updated_at: i64, pinned: bool, archived: bool, reminder_at: i64,
+  #[serde(default)] attachments: Vec<attachments::Attachment>,
+  #[serde(default)] base_updated_at: Option<i64>,
+}
+
+fn store_note(c:&Connection,note:&Note)->Result<(),String>{
+ attachments::validate_files(&note.attachments)?;
+ let files=serde_json::to_string(&note.attachments).map_err(|e|e.to_string())?;
+ c.execute("INSERT INTO notes(id,title,body,color,checklist,updated_at,pinned,archived,reminder_at,attachments,base_updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(id) DO UPDATE SET title=excluded.title,body=excluded.body,color=excluded.color,checklist=excluded.checklist,updated_at=excluded.updated_at,pinned=excluded.pinned,archived=excluded.archived,reminder_at=excluded.reminder_at,attachments=excluded.attachments,base_updated_at=excluded.base_updated_at",params![note.id,note.title,note.body,note.color,note.is_checklist as i32,note.updated_at,note.pinned as i32,note.archived as i32,note.reminder_at,files,note.base_updated_at]).map_err(|e|e.to_string())?;Ok(())
+}
+
+fn migrate_relay_history(c:&Connection)->Result<(),String>{
+ let done:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM sync_meta WHERE key='relay_snapshot_v2')",[],|r|r.get(0)).map_err(|e|e.to_string())?;
+ if done{return Ok(())}
+ let tx=c.unchecked_transaction().map_err(|e|e.to_string())?;
+ let own:String=tx.query_row("SELECT value FROM sync_meta WHERE key='device_id'",[],|r|r.get(0)).map_err(|e|e.to_string())?;
+ let notes={let mut stmt=tx.prepare("SELECT id,title,body,color,checklist,updated_at,pinned,archived,reminder_at,attachments,base_updated_at FROM notes").map_err(|e|e.to_string())?;let rows=stmt.query_map([],row_to_note).map_err(|e|e.to_string())?.collect::<rusqlite::Result<Vec<_>>>().map_err(|e|e.to_string())?;rows};
+ for note in notes {let payload=serde_json::to_string(&note).map_err(|e|e.to_string())?;tx.execute("INSERT INTO sync_changes(entity_id,operation,payload,changed_at,origin_device) VALUES (?1,'upsert',?2,?3,?4)",params![note.id,payload,note.updated_at,own]).map_err(|e|e.to_string())?;}
+ // Old releases sometimes removed notes without storing a tombstone. Any ID
+ // known to history but absent from the current database needs a canonical delete.
+ let deleted={let mut stmt=tx.prepare("SELECT id,MAX(time) FROM (SELECT entity_id AS id,changed_at AS time FROM sync_changes UNION ALL SELECT note_id AS id,deleted_at AS time FROM note_tombstones) WHERE id NOT IN (SELECT id FROM notes) GROUP BY id").map_err(|e|e.to_string())?;let rows=stmt.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?))).map_err(|e|e.to_string())?.collect::<rusqlite::Result<Vec<_>>>().map_err(|e|e.to_string())?;rows};
+ for (id,time) in deleted {
+  tx.execute("INSERT INTO note_tombstones(note_id,deleted_at,origin_device) VALUES (?1,?2,?3) ON CONFLICT(note_id) DO UPDATE SET deleted_at=MAX(deleted_at,excluded.deleted_at)",params![id,time,own]).map_err(|e|e.to_string())?;
+  tx.execute("INSERT INTO sync_changes(entity_id,operation,payload,changed_at,origin_device) VALUES (?1,'delete',NULL,?2,?3)",params![id,time,own]).map_err(|e|e.to_string())?;
+ }
+ tx.execute("INSERT INTO sync_meta(key,value) VALUES ('relay_snapshot_v2','1')",[]).map_err(|e|e.to_string())?;
+ tx.commit().map_err(|e|e.to_string())
 }
 
 fn row_to_note(row: &rusqlite::Row<'_>) -> rusqlite::Result<Note> {
-  Ok(Note { id: row.get(0)?, title: row.get(1)?, body: row.get(2)?, color: row.get(3)?, is_checklist: row.get::<_, i64>(4)? != 0, updated_at: row.get(5)?, pinned: row.get::<_,i64>(6)? != 0, archived: row.get::<_,i64>(7)? != 0, reminder_at: row.get(8)? })
+  Ok(Note { id: row.get(0)?, title: row.get(1)?, body: row.get(2)?, color: row.get(3)?, is_checklist: row.get::<_, i64>(4)? != 0, updated_at: row.get(5)?, pinned: row.get::<_,i64>(6)? != 0, archived: row.get::<_,i64>(7)? != 0, reminder_at: row.get(8)?, attachments: {
+    let raw:String=row.get(9)?;serde_json::from_str(&raw).map_err(|e|rusqlite::Error::FromSqlConversionFailure(9,rusqlite::types::Type::Text,Box::new(e)))?
+  },base_updated_at:row.get(10)? })
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -101,6 +136,14 @@ struct SyncChange {
 }
 
 #[tauri::command]
+fn lan_request_sync(db:State<'_,Database>)->Result<String,String>{
+ let c=db.0.lock().map_err(|e|e.to_string())?;
+ let count:i64=c.query_row("SELECT COUNT(*) FROM trusted_peers",[],|r|r.get(0)).map_err(|e|e.to_string())?;
+ if count==0{return Err("Pair your Android phone first".into())}
+ lan_sync::notify_peers_note_changed();
+ Ok("Sync requested. Keep SideNote running on your paired phone; pending transfers resume automatically.".into())
+}
+#[tauri::command]
 fn lan_generate_key()->String{lan_sync::make_key()}
 #[tauri::command]
 fn lan_start_server(db:State<'_,Database>,key_hex:String)->Result<String,String>{lan_sync::start_server(db.0.clone(),&key_hex)}
@@ -120,7 +163,7 @@ struct TrustedPeer { device_id:String, label:String, public_key:String }
 #[tauri::command]
 fn trusted_peers(db:State<'_,Database>)->Result<Vec<TrustedPeer>,String>{
  let c=db.0.lock().map_err(|e|e.to_string())?;
- let mut q=c.prepare("SELECT device_id,label,COALESCE(public_key,'') FROM trusted_peers ORDER BY label").map_err(|e|e.to_string())?;
+ let mut q=c.prepare("SELECT device_id,label,'' FROM trusted_peers ORDER BY label").map_err(|e|e.to_string())?;
  let res = q.query_map([],|r|Ok(TrustedPeer{device_id:r.get(0)?,label:r.get(1)?,public_key:r.get(2)?})).map_err(|e|e.to_string())?.collect::<rusqlite::Result<Vec<_>>>().map_err(|e|e.to_string())?;
  Ok(res)
 }
@@ -143,16 +186,17 @@ fn trust_peer(db:State<'_,Database>,device_id:String,label:String,public_key:Str
  let c=db.0.lock().map_err(|e|e.to_string())?;
  let existing:Option<String>=c.query_row("SELECT public_key FROM trusted_peers WHERE device_id=?1",[&device_id],|r|r.get(0)).optional().map_err(|e|e.to_string())?;
  if let Some(old)=existing {
-  if !old.is_empty() && old != public_key {return Err("Trusted key changed! Remove device first, independently verify the new fingerprint, then pair again.".into())}
+  if !old.is_empty() && !secure_lan::verify_token(Some(&old),&public_key)? {return Err("Trusted key changed! Remove device first, independently verify the new fingerprint, then pair again.".into())}
  }
  let own:String=c.query_row("SELECT value FROM sync_meta WHERE key='device_id'",[],|r|r.get(0)).map_err(|e|e.to_string())?;
  if own==device_id{return Err("Cannot trust the current device as a peer".into())}
- c.execute("INSERT INTO trusted_peers(device_id,label,public_key) VALUES (?1,?2,?3) ON CONFLICT(device_id) DO UPDATE SET label=excluded.label,public_key=excluded.public_key",params![device_id,label,public_key]).map_err(|e|e.to_string())?;Ok(())
+ c.execute("INSERT INTO trusted_peers(device_id,label,public_key) VALUES (?1,?2,?3) ON CONFLICT(device_id) DO UPDATE SET label=excluded.label,public_key=excluded.public_key",params![device_id,label,secure_lan::protect_token(&public_key)?]).map_err(|e|e.to_string())?;Ok(())
 }
 #[tauri::command]
 fn untrust_peer(db:State<'_,Database>,device_id:String)->Result<(),String>{
  let id=Uuid::parse_str(device_id.trim()).map_err(|_|"Invalid device UUID".to_string())?.to_string();
  let c=db.0.lock().map_err(|e|e.to_string())?;
+ lan_sync::forget_contact(&id);
  c.execute("DELETE FROM trusted_peers WHERE device_id=?1",[id]).map_err(|e|e.to_string())?; Ok(())
 }
 
@@ -211,26 +255,9 @@ fn list_sync_conflicts(db:State<'_,Database>) -> Result<Vec<ConflictEntry>,Strin
 // local content intact and creates a new independent note for incoming content.
 // Remote deletion conflicts cannot be saved as copies and must be kept locally.
 #[tauri::command]
-fn resolve_sync_conflict(db:State<'_,Database>, conflict_id:i64, action:String) -> Result<(),String> {
- if action!="keep_local" && action!="save_copy" {return Err("Unsupported conflict action".into())}
- let mut c=db.0.lock().map_err(|e|e.to_string())?;
- let tx=c.transaction().map_err(|e|e.to_string())?;
- let (operation,payload):(String,Option<String>)=tx.query_row("SELECT operation,payload FROM sync_conflicts WHERE id=?1",params![conflict_id],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|_|"Conflict not found".to_string())?;
- if action=="save_copy" {
-   if operation!="upsert" {return Err("Deleted note has no content to copy".into())}
-   let raw=payload.ok_or("Missing remote note content")?;
-   let mut note:Note=serde_json::from_str(&raw).map_err(|e|e.to_string())?;
-   if note.title.len()>2000 || note.body.len()>1_000_000 || !(0..=5).contains(&note.color) {return Err("Invalid incoming note".into())}
-   note.id=Uuid::new_v4().to_string();
-   note.title=format!("{} (conflict copy)",note.title.chars().take(1960).collect::<String>());
-   note.updated_at=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e|e.to_string())?.as_millis() as i64;
-   let origin:String=tx.query_row("SELECT value FROM sync_meta WHERE key='device_id'",[],|r|r.get(0)).map_err(|e|e.to_string())?;
-   tx.execute("INSERT INTO notes(id,title,body,color,checklist,updated_at,pinned,archived,reminder_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![note.id,note.title,note.body,note.color,note.is_checklist as i32,note.updated_at,note.pinned as i32,note.archived as i32,note.reminder_at]).map_err(|e|e.to_string())?;
-   let serialized=serde_json::to_string(&note).map_err(|e|e.to_string())?;
-   tx.execute("INSERT INTO sync_changes(entity_id,operation,payload,changed_at,origin_device) VALUES (?1,'upsert',?2,?3,?4)",params![note.id,serialized,note.updated_at,origin]).map_err(|e|e.to_string())?;
- }
- tx.execute("DELETE FROM sync_conflicts WHERE id=?1",params![conflict_id]).map_err(|e|e.to_string())?;
- tx.commit().map_err(|e|e.to_string())
+fn resolve_sync_conflict(app:tauri::AppHandle,db:State<'_,Database>,conflict_id:i64,action:String)->Result<(),String>{
+ let mut c=db.0.lock().map_err(|e|e.to_string())?;recovery::resolve_conflict(&mut c,conflict_id,&action)?;
+ let _=app.emit("sidenote_sync_updated",1);lan_sync::notify_peers_note_changed();Ok(())
 }
 
 #[tauri::command]
@@ -280,20 +307,21 @@ fn get_window_placement(db:State<'_,Database>, label:String)->Result<Option<Wind
 #[tauri::command]
 fn list_notes(db: State<'_,Database>) -> Result<Vec<Note>,String> {
  let connection = db.0.lock().map_err(|e| e.to_string())?;
- let mut stmt = connection.prepare("SELECT id,title,body,color,checklist,updated_at,pinned,archived,reminder_at FROM notes ORDER BY pinned DESC, updated_at DESC").map_err(|e|e.to_string())?;
+ let mut stmt = connection.prepare("SELECT id,title,body,color,checklist,updated_at,pinned,archived,reminder_at,attachments,base_updated_at FROM notes ORDER BY pinned DESC, updated_at DESC").map_err(|e|e.to_string())?;
  let rows = stmt.query_map([],row_to_note).map_err(|e|e.to_string())?;
  rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e|e.to_string())
 }
 
 #[tauri::command]
-fn upsert_note(app:tauri::AppHandle, db:State<'_,Database>, note:Note)->Result<(),String> {
+fn upsert_note(app:tauri::AppHandle, db:State<'_,Database>, mut note:Note)->Result<(),String> {
  if note.id.is_empty() || note.id.len()>160 || note.title.len()>2000 || note.body.len()>1000000 || !(0..=5).contains(&note.color) {return Err("Invalid note fields".into())}
  let mut c=db.0.lock().map_err(|e|e.to_string())?;
  let tx=c.transaction().map_err(|e|e.to_string())?;
  let origin:String=tx.query_row("SELECT value FROM sync_meta WHERE key='device_id'",[],|r|r.get(0)).map_err(|e|e.to_string())?;
+ note.base_updated_at=tx.query_row("SELECT updated_at FROM notes WHERE id=?1",[&note.id],|r|r.get(0)).optional().map_err(|e|e.to_string())?;
  // Preserve on-disk payload in sync log so future peers can replay this exact revision.
  let payload=serde_json::to_string(&note).map_err(|e|e.to_string())?;
- tx.execute("INSERT INTO notes (id,title,body,color,checklist,updated_at,pinned,archived,reminder_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(id) DO UPDATE SET title=excluded.title,body=excluded.body,color=excluded.color,checklist=excluded.checklist,updated_at=excluded.updated_at,pinned=excluded.pinned,archived=excluded.archived,reminder_at=excluded.reminder_at", params![note.id,note.title,note.body,note.color,note.is_checklist as i32,note.updated_at,note.pinned as i32,note.archived as i32,note.reminder_at]).map_err(|e|e.to_string())?;
+   store_note(&tx,&note)?;
  tx.execute("DELETE FROM note_origin WHERE note_id=?1",params![note.id]).map_err(|e|e.to_string())?;
  tx.execute("DELETE FROM note_tombstones WHERE note_id=?1",params![note.id]).map_err(|e|e.to_string())?;
  tx.execute("INSERT INTO sync_changes(entity_id,operation,payload,changed_at,origin_device) VALUES (?1,'upsert',?2,?3,?4)",params![note.id,payload,note.updated_at,origin]).map_err(|e|e.to_string())?;  tx.commit().map_err(|e|e.to_string())?;
@@ -311,10 +339,12 @@ fn delete_note(app:tauri::AppHandle, db:State<'_,Database>, id:String)->Result<(
  let existed:i64=tx.query_row("SELECT COUNT(*) FROM notes WHERE id=?1",params![id],|r|r.get(0)).map_err(|e|e.to_string())?;
  if existed>0 {
   let now=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e|e.to_string())?.as_millis() as i64;
+  let base:i64=tx.query_row("SELECT updated_at FROM notes WHERE id=?1",[&id],|r|r.get(0)).map_err(|e|e.to_string())?;
+  recovery::remember(&tx,&id)?;
   tx.execute("DELETE FROM notes WHERE id=?1",params![id]).map_err(|e|e.to_string())?;
   tx.execute("DELETE FROM note_origin WHERE note_id=?1",params![id]).map_err(|e|e.to_string())?;
   tx.execute("INSERT INTO note_tombstones(note_id,deleted_at,origin_device) VALUES (?1,?2,?3) ON CONFLICT(note_id) DO UPDATE SET deleted_at=excluded.deleted_at,origin_device=excluded.origin_device",params![id,now,origin]).map_err(|e|e.to_string())?;
-  tx.execute("INSERT INTO sync_changes(entity_id,operation,payload,changed_at,origin_device) VALUES (?1,'delete',NULL,?2,?3)",params![id,now,origin]).map_err(|e|e.to_string())?;
+  tx.execute("INSERT INTO sync_changes(entity_id,operation,payload,changed_at,origin_device,base_updated_at) VALUES (?1,'delete',NULL,?2,?3,?4)",params![id,now,origin,base]).map_err(|e|e.to_string())?;
  }
  tx.commit().map_err(|e|e.to_string())?;
  lan_sync::notify_peers_note_changed();
@@ -337,18 +367,32 @@ pub fn run(){
  .plugin(tauri_plugin_global_shortcut::Builder::new().build())
  .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
  .setup(|app| {
+  app_updates::setup(app).map_err(std::io::Error::other)?;
   let path=db_path(app).map_err(std::io::Error::other)?;
   let c=Connection::open(path)?;
   c.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY,title TEXT NOT NULL,body TEXT NOT NULL,color INTEGER NOT NULL,checklist INTEGER NOT NULL,updated_at INTEGER NOT NULL,pinned INTEGER NOT NULL,archived INTEGER NOT NULL,reminder_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS note_windows (label TEXT PRIMARY KEY,x REAL NOT NULL,y REAL NOT NULL,width REAL NOT NULL,height REAL NOT NULL);")?;
   c.execute_batch("CREATE TABLE IF NOT EXISTS trusted_peers(device_id TEXT PRIMARY KEY,label TEXT NOT NULL,public_key TEXT); CREATE TABLE IF NOT EXISTS sync_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS sync_changes(seq INTEGER PRIMARY KEY AUTOINCREMENT,entity_id TEXT NOT NULL,operation TEXT NOT NULL CHECK(operation IN ('upsert','delete')),payload TEXT,changed_at INTEGER NOT NULL,origin_device TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_sync_changes_entity ON sync_changes(entity_id); CREATE TABLE IF NOT EXISTS note_tombstones(note_id TEXT PRIMARY KEY,deleted_at INTEGER NOT NULL,origin_device TEXT NOT NULL); CREATE TABLE IF NOT EXISTS imported_changes(origin_device TEXT NOT NULL,origin_seq INTEGER NOT NULL,PRIMARY KEY(origin_device,origin_seq)); CREATE TABLE IF NOT EXISTS note_origin(note_id TEXT PRIMARY KEY,origin_device TEXT NOT NULL); CREATE TABLE IF NOT EXISTS sync_peer_cursors(peer_device TEXT PRIMARY KEY,last_seq INTEGER NOT NULL DEFAULT 0 CHECK(last_seq>=0)); CREATE TABLE IF NOT EXISTS sync_conflicts(id INTEGER PRIMARY KEY AUTOINCREMENT,note_id TEXT NOT NULL,origin_device TEXT NOT NULL,origin_seq INTEGER NOT NULL,operation TEXT NOT NULL,payload TEXT,changed_at INTEGER NOT NULL);")?;
+  let columns=c.prepare("PRAGMA table_info(notes)")?.query_map([],|r|r.get::<_,String>(1))?.collect::<rusqlite::Result<Vec<_>>>()?;
+  if !columns.iter().any(|v|v=="attachments"){c.execute("ALTER TABLE notes ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'",[])?;}
+  if !columns.iter().any(|v|v=="base_updated_at"){c.execute("ALTER TABLE notes ADD COLUMN base_updated_at INTEGER",[])?;}
+  let change_columns=c.prepare("PRAGMA table_info(sync_changes)")?.query_map([],|r|r.get::<_,String>(1))?.collect::<rusqlite::Result<Vec<_>>>()?;
+  if !change_columns.iter().any(|v|v=="base_updated_at"){c.execute("ALTER TABLE sync_changes ADD COLUMN base_updated_at INTEGER",[])?;}
   // Upgrade previous installations: legacy UUID-only allowlist rows have no pinned public key and cannot authenticate.
   let has_key:bool=c.prepare("PRAGMA table_info(trusted_peers)")?.query_map([],|r|r.get::<_,String>(1))?.filter_map(Result::ok).any(|v|v=="public_key");
   if !has_key {c.execute("ALTER TABLE trusted_peers ADD COLUMN public_key TEXT",[])?;}
   c.execute("INSERT OR IGNORE INTO sync_meta(key,value) VALUES ('device_id',?1)",params![Uuid::new_v4().to_string()])?;
+  // Existing notes from releases before change logging must join the first sync.
+  let legacy={let mut stmt=c.prepare("SELECT id,title,body,color,checklist,updated_at,pinned,archived,reminder_at,attachments,base_updated_at FROM notes WHERE id NOT IN (SELECT entity_id FROM sync_changes) AND id NOT IN (SELECT note_id FROM note_origin)")?;let rows=stmt.query_map([],row_to_note)?.collect::<rusqlite::Result<Vec<_>>>()?;rows};
+  let own_id:String=c.query_row("SELECT value FROM sync_meta WHERE key='device_id'",[],|r|r.get(0))?;
+  for note in legacy {let payload=serde_json::to_string(&note)?;c.execute("INSERT INTO sync_changes(entity_id,operation,payload,changed_at,origin_device) VALUES (?1,'upsert',?2,?3,?4)",params![note.id,payload,note.updated_at,own_id])?;}
+  migrate_relay_history(&c).map_err(std::io::Error::other)?;
   key_protection::migrate_or_create(&c).map_err(std::io::Error::other)?;
+  recovery::initialize(&c).map_err(std::io::Error::other)?;
+  let secure_ready=secure_lan::initialize(&c).is_ok();
   let db_arc = Arc::new(Mutex::new(c));
   app.manage(Database(db_arc.clone()));
-  lan_sync::init_auto_sync(app.handle().clone(), db_arc.clone());
+  app.manage(file_shelf::DroppedFiles::default());
+  if secure_ready {lan_sync::init_auto_sync(app.handle().clone(), db_arc.clone());}
   if let Some(w)=app.get_webview_window("main"){
     let _=w.set_skip_taskbar(true);
     let areas = Arc::new(Mutex::new(Vec::new()));
@@ -391,6 +435,7 @@ pub fn run(){
   Ok(())
  })
  .on_window_event(|window, event| {
+   if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop{paths,..})=event {file_shelf::authorize(window.app_handle(),window.label(),paths);}
    if window.label() == "main" || window.label() == "library" {
      if let tauri::WindowEvent::CloseRequested { api, .. } = event {
        api.prevent_close();
@@ -398,7 +443,7 @@ pub fn run(){
      }
    }
  })
- .invoke_handler(tauri::generate_handler![lan_generate_key,lan_start_server,lan_sync_peer,lan_get_pairing_pin,local_device_public_key,public_key_fingerprint,trusted_peers,trust_peer,untrust_peer,list_notes,upsert_note,delete_note,save_window_placement,get_window_placement,local_device_id,export_local_changes,export_sync_bundle,import_sync_bundle,list_sync_conflicts,resolve_sync_conflict,set_window_bounds_atomic,set_dock_regions])
+ .invoke_handler(tauri::generate_handler![pro::pro_status,pro::pro_start_trial,pro::pro_activate,pro::pro_website,app_updates::check_for_updates,app_updates::install_update,file_shelf::attachment_thumbnail,file_shelf::attachment_import_paths,file_shelf::attachment_save_bundle,lan_sync::lan_service_status,recovery::trash_notes,recovery::restore_trash,recovery::permanently_delete_trash,recovery::complete_backup,lan_sync::pairing_invitation,lan_sync::lan_certificate_fingerprint,lan_request_sync,attachments::attachment_import_start,attachments::attachment_import_chunk,attachments::attachment_import_cancel,attachments::attachment_import_finish,attachments::attachment_status,attachments::attachment_open,attachments::attachment_save_as,lan_generate_key,lan_start_server,lan_sync_peer,lan_get_pairing_pin,local_device_public_key,public_key_fingerprint,trusted_peers,trust_peer,untrust_peer,list_notes,upsert_note,delete_note,save_window_placement,get_window_placement,local_device_id,export_local_changes,export_sync_bundle,import_sync_bundle,list_sync_conflicts,resolve_sync_conflict,set_window_bounds_atomic,set_dock_regions])
  .run(tauri::generate_context!())
  .expect("error while running SideNote");
 }

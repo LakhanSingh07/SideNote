@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.sidedeck.notes.WindowsInteropTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-10-16T10:41:13" hostname="LAKHANSINGH" time="5.366">
+  <properties/>
+  <testcase name="resumedFilesAndEditsTravelBothDirections" classname="com.sidedeck.notes.WindowsInteropTest" time="5.366"/>
+  <system-out><![CDATA[WARNING: No manifest file found at .\AndroidManifest.xml.
+Falling back to the Android OS resources only.
+To remove this warning, annotate your test class with @Config(manifest=Config.NONE).
+If you're using Android Gradle Plugin, add testOptions.unitTests.includeAndroidResources = true to your build.gradle
+]]></system-out>
+  <system-err><![CDATA[Intent = Intent { act=com.sidedeck.notes.SYNC_UPDATED pkg=org.robolectric.default }; Matching wrappers: []
+Intent = Intent { act=com.sidedeck.notes.SYNC_UPDATED pkg=org.robolectric.default }; Matching wrappers: []
+]]></system-err>
+</testsuite>

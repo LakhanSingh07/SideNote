@@ -1,13 +1,24 @@
-{
+﻿{
+    "editorChecks":  31,
     "status":  "PASS",
-    "updatedCopies":  [
-                          "C:\\Users\\lakha\\Desktop\\sidenote-windows.exe",
-                          "C:\\Users\\lakha\\AppData\\Local\\SideNote\\sidenote-windows.exe",
-                          "C:\\Users\\lakha\\Videos\\SideNote-Android-main\\sidenote-windows.exe",
-                          "C:\\Users\\lakha\\Videos\\SideNote-Android-main\\SideNote-Windows-v1.3.2-Acceptance-Kit\\sidenote-windows.exe"
-                      ],
-    "secondLaunchExitCode":  0,
-    "runningInstances":  1,
-    "runningPath":  "C:\\Users\\lakha\\Desktop\\sidenote-windows.exe",
-    "sha256":  "4EF45DE6D4D635097FADC009794DB1D181C3E55760E5856BE4F3159F6C75B057"
+    "timestamp":  "2026-10-16T15:32:01.7102581+05:30",
+    "deployment":  [
+                       {
+                           "Path":  "C:\\Users\\lakha\\Desktop\\sidenote-windows.exe",
+                           "Hash":  "459E64885305142A2C4DB9F02D00FD6C792CD0C3D5F7EC9D7355D29559865FDA"
+                       },
+                       {
+                           "Path":  "C:\\Users\\lakha\\AppData\\Local\\SideNote\\sidenote-windows.exe",
+                           "Hash":  "459E64885305142A2C4DB9F02D00FD6C792CD0C3D5F7EC9D7355D29559865FDA"
+                       },
+                       {
+                           "Path":  "C:\\Users\\lakha\\Videos\\SideNote-Android-main\\sidenote-windows.exe",
+                           "Hash":  "459E64885305142A2C4DB9F02D00FD6C792CD0C3D5F7EC9D7355D29559865FDA"
+                       },
+                       {
+                           "Path":  "C:\\Users\\lakha\\Videos\\SideNote-Android-main\\SideNote-Windows-v1.3.2-Acceptance-Kit\\sidenote-windows.exe",
+                           "Hash":  "459E64885305142A2C4DB9F02D00FD6C792CD0C3D5F7EC9D7355D29559865FDA"
+                       }
+                   ],
+    "singleProcess":  true
 }

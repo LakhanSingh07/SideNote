@@ -12,9 +12,9 @@ This is the **actual native Kotlin Android project** based on v2.4 Compact Peek 
 - Edge overlay: 11dp visible handle, 236dp content-sized Peek Deck with maximum three previews, compact draggable note cards, minimized chip, independent note windows, checklist toggles, overflow actions and opacity/size options.
 - Theme tokens: original cream/yellow/pastel palette and a dark counterpart shared between app and overlay; no network fonts or third-party design assets.
 
-## Critical caveat
+## Current build and verification
 
-**This ZIP contains a source implementation, NOT a proven compiled or production-ready APK.** Here, we could only run structural/static checks and XML parsing. Android build, screenshot comparisons, keyboard/overlay interaction, accessibility, long-term data retention and phone testing remain unverified. Do not claim these passed until Antigravity/Android Studio executes them.
+Version 3.1.0 adds note attachments, system file picking/sharing, streamed LAN transfer and sync corrections. All 40 Android regression tests pass. Production Android sync code has been tested against the packaged Windows server with binary files and resumed transfers. A physical OnePlus 10T running Android 15 also passed installation, PIN pairing, 12 MiB file transfers with SHA-256 verification in both directions, note creation/edit/deletion, and Save as. Background power-management behavior and Wi-Fi throughput are not exhaustively tested. See [files and sync](../../FILES-AND-SYNC.md).
 
 ## Android Studio / Antigravity
 

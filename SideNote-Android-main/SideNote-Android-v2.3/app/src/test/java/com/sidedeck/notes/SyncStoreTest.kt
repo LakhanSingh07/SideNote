@@ -51,7 +51,6 @@ class SyncStoreTest {
             reminderAt = 0L
         )
         notesStore.save(note)
-        syncStore.recordUpsert(note)
 
         val bundleJson = syncStore.exportBundle()
         val obj = JSONObject(bundleJson)
@@ -71,7 +70,7 @@ class SyncStoreTest {
 
     @Test
     fun testImportBundleAppliesUpsert() {
-        val remoteDeviceId = "remote-dev-" + UUID.randomUUID().toString()
+        val remoteDeviceId = UUID.randomUUID().toString()
         val remoteNotePayload = JSONObject().apply {
             put("id", "remote-note-1")
             put("title", "Remote Title")
@@ -114,7 +113,7 @@ class SyncStoreTest {
 
     @Test
     fun testImportBundleIdempotencySkipsSeen() {
-        val remoteDeviceId = "remote-dev-2"
+        val remoteDeviceId = UUID.randomUUID().toString()
         val payload = JSONObject().apply {
             put("id", "remote-note-2")
             put("title", "Title 2")
@@ -165,7 +164,7 @@ class SyncStoreTest {
         syncStore.recordUpsert(note)
 
         // Incoming remote note with different content and timestamp from different device
-        val remoteDeviceId = "remote-dev-conflict"
+        val remoteDeviceId = UUID.randomUUID().toString()
         val payload = JSONObject().apply {
             put("id", "conflict-note")
             put("title", "Remote Edit")

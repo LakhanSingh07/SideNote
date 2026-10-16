@@ -1,0 +1,40 @@
+{
+  "windows": {
+    "tcpPingPass": true,
+    "unpairedRequestRejected": true,
+    "localDiscoveryPass": true,
+    "storedPairedDevices": 0,
+    "storedSyncConflicts": 0
+  },
+  "androidDevice": {
+    "adbDetected": false,
+    "liveRoundTrip": "not verified: no USB Android device enumerated"
+  },
+  "androidProbes": [],
+  "SyncAuditProbeTest": {
+    "tests": "4",
+    "failures": "3",
+    "cases": [
+      {
+        "name": "importedRemoteDeletionMustNotCreateLocalEchoChange",
+        "passed": false,
+        "failure": "java.lang.AssertionError: Remote imports must not be re-exported as local mutations expected:<0> but was:<1>"
+      },
+      {
+        "name": "singleLocalSaveCreatesOneCompatibleChange",
+        "passed": true,
+        "failure": null
+      },
+      {
+        "name": "upsertThenDeleteInSamePageMustLeaveNoNote",
+        "passed": false,
+        "failure": "java.lang.AssertionError: Same-page delete must see the preceding upsert"
+      },
+      {
+        "name": "downloadedWindowsCursorMustNotSkipPendingAndroidUpload",
+        "passed": false,
+        "failure": "java.lang.AssertionError: A Windows download cursor must not acknowledge Android uploads expected:<1> but was:<0>"
+      }
+    ]
+  }
+}

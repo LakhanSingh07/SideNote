@@ -1,0 +1,9 @@
+{
+  "passed": 4,
+  "checks": [
+    "Multi-select attaches zero-byte and arbitrary binary files without losing either",
+    "Open and Save As enable only after the local file is complete",
+    "Remove unlinks only the selected attachment",
+    "Attachment changes preserve note body"
+  ]
+}

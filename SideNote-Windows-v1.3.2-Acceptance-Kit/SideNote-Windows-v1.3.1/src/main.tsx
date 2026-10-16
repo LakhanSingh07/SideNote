@@ -1,3 +1,6 @@
+import {ProPanel} from './ProPanel';
+import {NOTE_TEMPLATES} from './templates';
+import {RecoveryPanel} from './RecoveryPanel';
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { invoke } from '@tauri-apps/api/core';
@@ -6,11 +9,14 @@ import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { getCurrentWindow, LogicalPosition, LogicalSize, availableMonitors, currentMonitor } from '@tauri-apps/api/window';
 import {
   Plus, Search, Pin, Archive, Trash2, Settings, Minus, X,
-  StickyNote, ChevronRight, Check, CheckSquare, Square, Maximize2, Minimize2,
+  StickyNote, ChevronRight, ChevronUp, ChevronDown, Check, CheckSquare, Square, Maximize2, Minimize2,
   Moon, Sun, RefreshCw, Copy, Wifi, ShieldCheck, Folder, Sparkles, Move,
   Bold, Italic, Underline, Heading, List, Clock, Link as LinkIcon,
-  Mic, RotateCcw, RotateCw, Bell, BellOff, Download, Upload, Volume2, Type
+  Paperclip, Mic, RotateCcw, RotateCw, Bell, BellOff, Download, Upload, Volume2, Type
 } from 'lucide-react';
+import { NoteEditor, insertNoteText, normalizeLink } from './NoteEditor';
+import { NoteFiles, type NoteAttachment } from './NoteFiles';
+import type { Editor } from '@tiptap/react';
 import './style.css';
 import appLogo from './assets/logo.png';
 
@@ -35,6 +41,15 @@ export function playReminderChime() {
   }
 }
 
+async function openNoteLink(value: string) {
+  const url = normalizeLink(value);
+  if (!url) return;
+  if (native) {
+    try { await invoke('plugin:opener|open_url', { url }); }
+    catch (error) { console.error('Could not open link', error); }
+  } else window.open(url, '_blank', 'noopener,noreferrer');
+}
+
 // 5 Curated Font Options (Android Roboto, Cute Cursive, Rounded Sans, Literary Serif, Typewriter)
 export const NOTE_FONTS = [
   { id: 'roboto', name: 'Roboto', category: 'Android Default (Clean)', class: 'font-roboto', sample: 'Aa Bb 123 • Clean' },
@@ -55,6 +70,8 @@ export type Note = {
   pinned: boolean;
   archived: boolean;
   reminderAt: number;
+  attachments?: NoteAttachment[];
+  baseUpdatedAt?: number | null;
 };
 
 // 6 Curated Pastel Note Colors matching Figma & SideNote Design System
@@ -202,7 +219,18 @@ async function loadNotes(): Promise<Note[]> {
   return native ? invoke<Note[]>('list_notes') : loadLocalDemo();
 }
 
-async function saveNote(n: Note) {
+const noteSaveQueues = new Map<string, Promise<void>>();
+const pendingNoteDrafts = new Map<string, Note>();
+function saveNote(n: Note): Promise<void> {
+  pendingNoteDrafts.set(n.id, n);
+  const operation = (noteSaveQueues.get(n.id) || Promise.resolve()).catch(() => {}).then(() => persistNote(n));
+  noteSaveQueues.set(n.id, operation);
+  void operation.finally(() => {
+    if (noteSaveQueues.get(n.id) === operation) { noteSaveQueues.delete(n.id); pendingNoteDrafts.delete(n.id); }
+  }).catch(() => {});
+  return operation;
+}
+async function persistNote(n: Note) {
   if (native) {
     await invoke('upsert_note', { note: n });
     try {
@@ -218,6 +246,7 @@ async function saveNote(n: Note) {
 }
 
 async function deleteNote(id: string) {
+  await noteSaveQueues.get(id)?.catch(() => {});
   if (native) {
     await invoke('delete_note', { id });
     try {
@@ -347,7 +376,10 @@ function useNotesList() {
     let active = true;
     const reload = () =>
       loadNotes().then(items => {
-        if (active) setNotes(items);
+        if (active) setNotes(items.map(item => {
+          const draft = pendingNoteDrafts.get(item.id);
+          return draft && draft.updatedAt >= item.updatedAt ? draft : item;
+        }));
       });
     reload();
     const timer = setInterval(reload, 600);
@@ -357,7 +389,9 @@ function useNotesList() {
     if (native) {
       listen<Note>('sidenote_changed', (evt) => {
         if (!active) return;
-        const updated = evt.payload;
+        const incoming = evt.payload;
+        const draft = pendingNoteDrafts.get(incoming.id);
+        const updated = draft && draft.updatedAt >= incoming.updatedAt ? draft : incoming;
         setNotes(prev => {
           const idx = prev.findIndex(x => x.id === updated.id);
           if (idx >= 0) {
@@ -393,7 +427,9 @@ function useNotesList() {
     const handleChannelMsg = (evt: MessageEvent) => {
       if (!active) return;
       if (evt.data?.type === 'upsert' && evt.data.note) {
-        const updated = evt.data.note as Note;
+        const incoming = evt.data.note as Note;
+        const draft = pendingNoteDrafts.get(incoming.id);
+        const updated = draft && draft.updatedAt >= incoming.updatedAt ? draft : incoming;
         setNotes(prev => {
           const idx = prev.findIndex(x => x.id === updated.id);
           if (idx >= 0) {
@@ -484,55 +520,6 @@ function FigmaSvgDefs() {
   );
 }
 
-// ============================================================
-// Markdown → rich HTML renderer (inline spans, headings, links)
-// ============================================================
-function renderMarkdown(text: string): string {
-  if (!text) return '';
-  const lines = text.split('\n');
-  const out: string[] = [];
-  for (const raw of lines) {
-    let line = raw
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    // Headings
-    if (line.startsWith('### ')) {
-      out.push(`<span style="font-size:1.22em;font-weight:800;display:block;margin:3px 0">${line.slice(4)}</span>`);
-      continue;
-    }
-    if (line.startsWith('## ')) {
-      out.push(`<span style="font-size:1.32em;font-weight:800;display:block;margin:4px 0">${line.slice(3)}</span>`);
-      continue;
-    }
-    if (line.startsWith('# ')) {
-      out.push(`<span style="font-size:1.45em;font-weight:900;display:block;margin:5px 0">${line.slice(2)}</span>`);
-      continue;
-    }
-    // Bullet
-    if (line.startsWith('• ') || line.startsWith('- ') || line.startsWith('* ')) {
-      line = '&bull;&nbsp;' + line.slice(2);
-    }
-    // Checkbox items in text
-    if (line.startsWith('[ ] ')) {
-      line = '&#9634;&nbsp;' + line.slice(4);
-    } else if (line.startsWith('[x] ') || line.startsWith('[X] ')) {
-      line = '&#9632;&nbsp;<del>' + line.slice(4) + '</del>';
-    }
-    // Bold **text** and __text__
-    line = line.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    line = line.replace(/__(.+?)__/g, '<strong>$1</strong>');
-    // Italic *text* and _text_
-    line = line.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
-    line = line.replace(/_([^_<>\n]+)_/g, '<em>$1</em>');
-    // Underline <u>text</u>
-    line = line.replace(/&lt;u&gt;(.+?)&lt;\/u&gt;/gi, '<u style="text-decoration:underline">$1</u>');
-    // Link [title](url)
-    line = line.replace(/\[([^\]]+)\]\(([^)]+)\)/g,
-      (_, title, href) => `<a href="${href}" target="_blank" rel="noopener noreferrer" class="note-md-link" style="color:var(--brand-violet);text-decoration:underline;cursor:pointer;font-weight:600">${title}</a>`);
-    out.push(`<span style="display:block;min-height:1.25em">${line || '&nbsp;'}</span>`);
-  }
-  return out.join('');
-}
-
 // Global delegated link opener (opens clicked links in default system browser)
 if (typeof document !== 'undefined') {
   document.addEventListener('click', (e) => {
@@ -544,7 +531,7 @@ if (typeof document !== 'undefined') {
         e.stopPropagation();
         if (native) {
           try {
-            invoke('plugin:opener|open_url', { path: href }).catch(() => {
+            invoke('plugin:opener|open_url', { url: href }).catch(() => {
               window.open(href, '_blank', 'noopener,noreferrer');
             });
           } catch {
@@ -590,6 +577,13 @@ function EdgeDock() {
   const [toastInfo, setToastInfo] = useState<{ text: string; undoNote?: Note } | null>(null);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const frameRef = useRef<HTMLDivElement>(null);
+  const [dockMode,setDockMode]=useState(localStorage.getItem('sidenote_dock_mode')||'readable');
+  const [paperStyle,setPaperStyle]=useState(localStorage.getItem('sidenote_paper_style')||'playful');
+  const tabLeft=dockMode==='readable'?365:607;
+  useEffect(()=>{if(!native)return;const stop=listen<{dockMode?:string;paperStyle?:string}>('sidenote_preferences_changed',e=>{if(e.payload.dockMode)setDockMode(e.payload.dockMode);if(e.payload.paperStyle)setPaperStyle(e.payload.paperStyle)});return()=>{void stop.then(f=>f())}},[]);
+
+  useEffect(()=>{const update=()=>{setDockMode(localStorage.getItem('sidenote_dock_mode')||'readable');setPaperStyle(localStorage.getItem('sidenote_paper_style')||'playful')};window.addEventListener('storage',update);window.addEventListener('sidenote_preferences',update);return()=>{window.removeEventListener('storage',update);window.removeEventListener('sidenote_preferences',update)}},[]);
+
   // Width factor: 0.6 = narrow, 1.0 = wide (affects card + OS window)
   const [widthFactor, setWidthFactor] = useState<number>(() => {
     return parseFloat(localStorage.getItem('sidenote_width_factor') || '0.85');
@@ -620,6 +614,8 @@ function EdgeDock() {
   const [dragTop, setDragTop] = useState<number | null>(null);
   const [dragLeft, setDragLeft] = useState<number | null>(null);
   const [isTearOff, setIsTearOff] = useState(false);
+  const [dockOffset, setDockOffset] = useState(0);
+  const wheelRef = useRef({ delta: 0, last: 0 });
 
   useEffect(() => {
     if (!native) return;
@@ -629,7 +625,7 @@ function EdgeDock() {
     const updateRegion = async () => {
       const scale = window.devicePixelRatio || 1;
       const elements = document.querySelectorAll<HTMLElement>(
-        '.tab:not(.dragging), .tab.open .card, .tab.open:not(.dragging) .dock-popup-bridge, .tab.dragging .card, .fab, .folder, .toast'
+        '.tab:not(.open):not(.dragging), .tab.open .card, .tab.dragging .card, .fab, .folder, .dock-scroll-arrow, .toast'
       );
       const rects = Array.from(elements).map(el => {
         const r = el.getBoundingClientRect();
@@ -676,6 +672,8 @@ function EdgeDock() {
     void applyStableScale();
     void adjustDockWidth(false);
   }, [widthFactor]);
+
+  useEffect(()=>{if(notes.length&&customOrder.length===0&&!draggingId)setCustomOrder(notes.filter(n=>!n.archived).map(n=>n.id))},[notes,customOrder.length,draggingId]);
 
   // Background reminder watcher: monitors notes and triggers pleasant chime
   useEffect(() => {
@@ -753,7 +751,7 @@ function EdgeDock() {
     collapseTimerRef.current = setTimeout(() => {
       if (draggingIdRef.current) return;
       // Don't collapse if user is actively typing in text editor
-      if (document.activeElement && document.activeElement.classList.contains('txt')) {
+      if (document.activeElement && document.activeElement.closest('.note-editor')) {
         return;
       }
       
@@ -810,7 +808,7 @@ function EdgeDock() {
   };
 
   // 4 recent notes displayed in the peeking tabs with custom drag order support
-  const dockNotes = useMemo(() => {
+  const orderedDockNotes = useMemo(() => {
     const unarchived = notes.filter(n => !n.archived);
     if (customOrder.length > 0) {
       return unarchived
@@ -822,16 +820,42 @@ function EdgeDock() {
           if (idxB !== -1) return 1;
           return Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt;
         })
-        .slice(0, 4);
+        ;
     }
     return unarchived
       .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt)
-      .slice(0, 4);
+      ;
   }, [notes, customOrder]);
+
+  const maxDockOffset = Math.max(0, orderedDockNotes.length - 4);
+  const visibleOffset = Math.min(dockOffset, maxDockOffset);
+  const dockNotes = useMemo(() => orderedDockNotes.slice(visibleOffset, visibleOffset + 4), [orderedDockNotes, visibleOffset]);
+  const activeIndex = dockNotes.findIndex(note => note.id === (draggingId || openNoteId));
+  const expandedOffset = activeIndex >= 0 ? 316 : 0;
+
+  const scrollDock = (direction: number) => {
+    if (draggingIdRef.current) return;
+    setOpenNoteId(null);
+    isExpandedRef.current = false;
+    setDockOffset(Math.max(0, Math.min(maxDockOffset, visibleOffset + direction)));
+  };
+
+  const handleDockWheel = (event: React.WheelEvent) => {
+    if (draggingIdRef.current || (event.target as HTMLElement).closest('.txt, .dock-card-title, .note-files')) return;
+    if (orderedDockNotes.length <= 4 || !event.deltaY) return;
+    event.stopPropagation();
+    const now = Date.now();
+    if (now - wheelRef.current.last < 140) return;
+    wheelRef.current.delta += event.deltaY * (event.deltaMode === 1 ? 16 : 1);
+    if (Math.abs(wheelRef.current.delta) < 24) return;
+    const direction = Math.sign(wheelRef.current.delta);
+    wheelRef.current = { delta: 0, last: now };
+    scrollDock(direction);
+  };
 
   const TOP0 = 80;
   const PITCH = 236;
-  const slot = (i: number) => TOP0 + i * PITCH;
+  const slot = (i: number) => TOP0 + i * PITCH + (activeIndex >= 0 && i > activeIndex ? expandedOffset : 0);
 
   const draggingIdRef = useRef<string | null>(null);
 
@@ -841,7 +865,9 @@ function EdgeDock() {
     e.preventDefault();
     e.stopPropagation();
 
-    const targetEl = e.currentTarget as HTMLElement;
+    // React moves the dragged tab's DOM node when reordering downward. Capture
+    // on the stable frame so that move cannot cancel the active pointer drag.
+    const targetEl = frameRef.current || e.currentTarget as HTMLElement;
     try {
       targetEl.setPointerCapture(e.pointerId);
     } catch {}
@@ -897,13 +923,14 @@ function EdgeDock() {
 
       // If user is near the edge dock, reorder slots vertically
       if (deltaX > -60) {
-        const targetIdx = Math.max(0, Math.min(dockNotes.length - 1, Math.round((newTop - TOP0) / PITCH)));
+        const targetIdx = dockNotes.reduce((best, _, idx) => Math.abs(slot(idx) - newTop) < Math.abs(slot(best) - newTop) ? idx : best, 0);
         if (targetIdx !== lastIdx) {
           const item = currentList[lastIdx];
           currentList.splice(lastIdx, 1);
           currentList.splice(targetIdx, 0, item);
           lastIdx = targetIdx;
-          const newOrder = currentList.map(x => x.id);
+          const newOrder = orderedDockNotes.map(x => x.id);
+          newOrder.splice(visibleOffset, currentList.length, ...currentList.map(x => x.id));
           setCustomOrder(newOrder);
           localStorage.setItem('sidenote_dock_order', JSON.stringify(newOrder));
         }
@@ -989,13 +1016,11 @@ function EdgeDock() {
   };
 
   const handleCreateNew = async () => {
-    if (dockNotes.length >= 4) {
-      showToast('Side panel holds 4 notes — delete one first');
-      return;
-    }
     const fresh = createFreshNote();
-    fresh.color = dockNotes.length % NOTE_COLORS.length;
+    fresh.color = orderedDockNotes.length % NOTE_COLORS.length;
     await saveNote(fresh);
+    setCustomOrder([fresh.id, ...orderedDockNotes.map(note => note.id)]);
+    setDockOffset(0);
     await expandDock(fresh.id);
   };
 
@@ -1006,21 +1031,24 @@ function EdgeDock() {
     collapseDock();
   };
 
-  const handleTextChange = (n: Note, newText: string) => {
+  const handleTextChange = (n: Note, newText: string, isChecklist: boolean) => {
     const updated: Note = {
-      ...n,
+      ...(pendingNoteDrafts.get(n.id) || n),
       body: newText,
-      updatedAt: Date.now(),
+      isChecklist,
+      updatedAt: Math.max(Date.now(), (pendingNoteDrafts.get(n.id)?.updatedAt || n.updatedAt) + 1),
     };
-    void saveNote(updated);
+    void saveNote(updated).catch(error => { console.error('Could not save popup note', error); showToast('Could not save note. Please try again.'); });
   };
 
   return (
     <>
       <FigmaSvgDefs />
       <div
-        className={`frame ${isMounted ? 'is-mounted' : ''}`}
+        className={`frame ${isMounted ? 'is-mounted' : ''} ${dockMode==='readable'?'is-readable':''} ${paperStyle==='quiet'?'is-quiet':''}`}
         ref={frameRef}
+        style={{ ['--expanded-offset' as any]: expandedOffset + 'px' }}
+        onWheel={handleDockWheel}
         id="frame"
         onPointerEnter={() => {
           if (collapseTimerRef.current) clearTimeout(collapseTimerRef.current);
@@ -1029,6 +1057,13 @@ function EdgeDock() {
         onPointerLeave={collapseDock}
       >
         <div className="dock-spine" aria-hidden="true" />
+        {orderedDockNotes.length > 4 && (
+          <button className="dock-scroll-arrow is-previous" type="button"
+            aria-label="Previous notes" title="Previous notes"
+            disabled={visibleOffset === 0} onClick={() => scrollDock(-1)}>
+            <ChevronUp size={36} strokeWidth={2} />
+          </button>
+        )}
         <div id="tabs" className={draggingId ? 'is-dragging' : ''}>
           {dockNotes.map((n, idx) => {
             const isOpen = openNoteId === n.id;
@@ -1039,17 +1074,28 @@ function EdgeDock() {
             return (
               <div
                 key={n.id}
+                role="button" tabIndex={0} aria-expanded={isOpen} aria-label={`Open note ${n.title||'Untitled note'}`} data-note-id={n.id}
+                onKeyDown={event=>{
+                  if(event.target!==event.currentTarget)return;
+                  if(event.key==='Enter'||event.key===' '){event.preventDefault();void expandDock(n.id)}
+                  else if(event.key==='Escape'){event.preventDefault();setOpenNoteId(null);isExpandedRef.current=false}
+                  else if(event.key==='ArrowDown'||event.key==='ArrowUp'){
+                    event.preventDefault();const next=idx+(event.key==='ArrowDown'?1:-1);
+                    if(next>=0&&next<dockNotes.length)document.querySelectorAll<HTMLElement>('.tab')[next]?.focus();
+                    else scrollDock(event.key==='ArrowDown'?1:-1)
+                  }
+                }}
                 className={`tab ${isOpen ? 'open' : ''} ${isDragging ? 'dragging' : ''} ${isDragging && isTearOff ? 'tearing-off' : ''}`}
                 style={{
                   top: isDragging && dragTop !== null ? `${dragTop}px` : `${slot(idx)}px`,
-                  left: isDragging && dragLeft !== null ? `${607 + dragLeft}px` : '607px',
+                  left: isDragging && dragLeft !== null ? `${tabLeft + dragLeft}px` : `${tabLeft}px`,
                   ['--c' as any]: col,
                   ['--d' as any]: `${350 + idx * 90}ms`,
                   zIndex: isDragging ? 100 : (isOpen ? 20 : 1),
                 }}
                 onPointerDown={e => {
                   const target = e.target as HTMLElement;
-                  if (!target.closest('button, .card-action-btn, .txt')) {
+                  if (!target.closest('button, .card-action-btn, .txt, .note-files')) {
                     handleGripPointerDown(e, n);
                   }
                 }}
@@ -1062,14 +1108,13 @@ function EdgeDock() {
               >
                 {/* Title-only paper tabs share one edge and one footer. */}
                 <div className="tab-preview">
-                  <StickyNote className="tab-note-icon" size={30} strokeWidth={1.5} aria-hidden="true" />
-                  <div className="tab-preview-title">
-                    {(n.title.trim() || (n.body ? n.body.split('\n')[0].replace(/^\[[ x]\]\s*/i, '').slice(0, 24) : 'Note')).replace(/[*_#`~]/g, '')}
+                  <span className="tab-note-badge">{n.attachments?.length?<><Paperclip size={22}/>{n.attachments.length}</>:n.isChecklist?<><CheckSquare size={22}/>{(n.body.match(/^\s*[-*]?\s*\[ \]/gm)||[]).length}</>:n.reminderAt>0?<><Bell size={22}/>{new Date(n.reminderAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</>:n.pinned?<Pin size={22}/>:null}</span>
+                  <div className="tab-preview-title" title={n.title || n.body.split('\n')[0]}>
+                    {(n.title.trim() || (n.body ? n.body.split('\n')[0].replace(/^\[[ x]\]\s*/i, '') : 'Note')).replace(/[*_#`~]/g, '')}
                   </div>
 
                 </div>
 
-                <div className="dock-popup-bridge" />
                 <div className="card" style={{ ['--c' as any]: col }}>
                   <div className="in">
                     <div
@@ -1093,7 +1138,7 @@ function EdgeDock() {
                         <i /><i /><i />
                       </div>
 
-                      <span className="dock-card-title">{n.title.trim() || 'Little note'}</span>
+                      <span className="dock-card-title" title={n.title}> {n.title.trim() || 'Little note'}</span>
                       <div className="card-actions">
                         <button
                           type="button"
@@ -1121,20 +1166,12 @@ function EdgeDock() {
                       </div>
                     </div>
 
-                    <div
-                      className="txt"
-                      contentEditable
-                      suppressContentEditableWarning
-                      onInput={e => handleTextChange(n, (e.target as HTMLElement).innerText)}
-                      onKeyDown={e => {
-                        if (e.key === 'Escape') {
-                          (e.target as HTMLElement).blur();
-                          collapseDock();
-                        }
-                      }}
-                    >
-                      {n.body || n.title}
-                    </div>
+                    <NoteEditor key={n.id} compact value={n.body} checklist={n.isChecklist}
+                      onChange={(body, isChecklist) => handleTextChange(n, body, isChecklist)} onOpenLink={openNoteLink} />
+                    <NoteFiles compact noteId={n.id} files={n.attachments} onChange={async attachments=>{
+                      const latest=pendingNoteDrafts.get(n.id)||n;
+                      await saveNote({...latest,attachments,updatedAt:Math.max(Date.now(),latest.updatedAt+1)});
+                    }} />
                   </div>
                 </div>
               </div>
@@ -1155,6 +1192,13 @@ function EdgeDock() {
             <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
           </svg>
         </button>
+        {orderedDockNotes.length > 4 && (
+          <button className="dock-scroll-arrow is-next" type="button"
+            aria-label="Next notes" title="Next notes"
+            disabled={visibleOffset === maxDockOffset} onClick={() => scrollDock(1)}>
+            <ChevronDown size={36} strokeWidth={2} />
+          </button>
+        )}
       </div>
 
       {/* Pill Toast Notification with Undo */}
@@ -1194,29 +1238,23 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [isChecklist, setIsChecklist] = useState(false);
-  const [isTextMode, setIsTextMode] = useState(false);
   const [pinned, setPinned] = useState(false);
   const [color, setColor] = useState(0);
   const [reminderAt, setReminderAt] = useState(0);
-  const [newItemText, setNewItemText] = useState('');
 
   // Modals & Popups
   const [showReminderModal, setShowReminderModal] = useState(false);
-  const [showLinkModal, setShowLinkModal] = useState(false);
   const [showFontModal, setShowFontModal] = useState(false);
   const [showVoiceModal, setShowVoiceModal] = useState(false);
   const [voiceInputDraft, setVoiceInputDraft] = useState('');
   const [selectedFont, setSelectedFont] = useState<string>(() => {
     return localStorage.getItem('sidenote_font_' + (effectiveId || '')) || localStorage.getItem('sidenote_default_font') || 'roboto';
   });
-  const [linkTitleInput, setLinkTitleInput] = useState('');
-  const [linkUrlInput, setLinkUrlInput] = useState('https://');
   const [customReminderInput, setCustomReminderInput] = useState('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [saveStatus, setSaveStatus] = useState<'Saved' | 'Saving\u2026'>('Saved');
+  const [saveStatus, setSaveStatus] = useState<'Saved' | 'Saving?' | 'Save failed'>('Saved');
   const [isMaximized, setIsMaximized] = useState(false);
   // Preview / Edit toggle — shows rendered markdown when not actively editing
-  const [isEditingBody, setIsEditingBody] = useState(false);
 
   useEffect(() => {
     if (native) {
@@ -1224,14 +1262,16 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
     }
   }, []);
 
-  // Undo / Redo history
-  const [history, setHistory] = useState<string[]>([]);
-  const [historyIdx, setHistoryIdx] = useState<number>(-1);
 
   // Voice speech-to-text dictation
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = useRef<any>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const editorRef = useRef<Editor | null>(null);
+  const draftRef = useRef<Note | null>(null);
+  const [,setNoteRevision]=useState(0);
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
+  const pendingSaves = useRef(0);
+  useEffect(() => () => recognitionRef.current?.stop(), []);
 
   const currentFontObj = NOTE_FONTS.find(f => f.id === selectedFont) || NOTE_FONTS[0];
   const fontClass = currentFontObj.class;
@@ -1251,7 +1291,9 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
   };
 
   useEffect(() => {
-    if (note) {
+    if (note && (!draftRef.current || note.id !== draftRef.current.id ||
+      (pendingSaves.current === 0 && note.updatedAt > draftRef.current.updatedAt))) {
+      draftRef.current = note;
       setTitle(note.title);
       setBody(note.body);
       setIsChecklist(note.isChecklist);
@@ -1262,45 +1304,13 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
       const storedFont = localStorage.getItem('sidenote_font_' + (note.id || effectiveId || '')) || localStorage.getItem('sidenote_default_font') || 'roboto';
       setSelectedFont(storedFont);
 
-      // Initialize history stack on first note load
-      if (history.length === 0) {
-        setHistory([note.body]);
-        setHistoryIdx(0);
-      }
+
     }
-  }, [note?.id, note?.color, note?.title, note?.body, note?.updatedAt]);
+  }, [note?.id, note?.color, note?.title, note?.body, note?.updatedAt, note?.attachments]);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3000);
-  };
-
-  // Push new state to history (clamp to 50 items)
-  const pushHistory = (newBody: string) => {
-    if (historyIdx >= 0 && history[historyIdx] === newBody) return;
-    const nextHistory = [...history.slice(0, historyIdx + 1), newBody].slice(-50);
-    setHistory(nextHistory);
-    setHistoryIdx(nextHistory.length - 1);
-  };
-
-  const handleUndo = () => {
-    if (historyIdx > 0) {
-      const prevIdx = historyIdx - 1;
-      const prevText = history[prevIdx];
-      setHistoryIdx(prevIdx);
-      setBody(prevText);
-      void updateFields({ body: prevText });
-    }
-  };
-
-  const handleRedo = () => {
-    if (historyIdx < history.length - 1) {
-      const nextIdx = historyIdx + 1;
-      const nextText = history[nextIdx];
-      setHistoryIdx(nextIdx);
-      setBody(nextText);
-      void updateFields({ body: nextText });
-    }
   };
 
   // Persist placement on move
@@ -1344,26 +1354,24 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
 
   const colorMeta = NOTE_COLORS[color] || NOTE_COLORS[0];
 
-  const updateFields = async (updates: Partial<Note>) => {
-    setSaveStatus('Saving…');
-    const updated: Note = {
-      ...note,
-      ...updates,
-      updatedAt: Date.now(),
-    };
-    await saveNote(updated);
-    setTimeout(() => setSaveStatus('Saved'), 300);
-  };
-
-  const handleTitleBlur = () => {
-    if (title !== note.title) void updateFields({ title });
-  };
-
-  const handleBodyBlur = () => {
-    if (body !== note.body) {
-      pushHistory(body);
-      void updateFields({ body });
-    }
+  const updateFields = (updates: Partial<Note>) => {
+    const current = draftRef.current || note;
+    const updated: Note = { ...current, ...updates, updatedAt: Math.max(Date.now(), current.updatedAt + 1) };
+    draftRef.current = updated;
+    setNoteRevision(revision=>revision+1);
+    pendingSaves.current++;
+    setSaveStatus('Saving?');
+    const operation = saveQueue.current.catch(() => {}).then(() => saveNote(updated));
+    saveQueue.current = operation;
+    return operation.then(() => {
+      pendingSaves.current--;
+      if (!pendingSaves.current) setSaveStatus('Saved');
+    }, error => {
+      pendingSaves.current--;
+      setSaveStatus('Save failed');
+      console.error('Note save failed', error);
+      showToast('Could not save note. Please try again.');
+    });
   };
 
   const togglePin = async () => {
@@ -1417,6 +1425,7 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
   };
 
   const handleCloseNote = async () => {
+    await saveQueue.current.catch(() => {});
     if (native) {
       await persistPlacement(placementKey(note.id));
       await getCurrentWindow().close();
@@ -1431,78 +1440,9 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
     showToast('Note archived');
   };
 
-  // Text formatting insertion helper
-  const insertFormatting = (prefix: string, suffix: string = '') => {
-    // Switch to edit mode first so textarea is mounted
-    setIsEditingBody(true);
-    // Use setTimeout so textarea mounts before we try to access it
-    setTimeout(() => {
-      const el = textareaRef.current;
-      if (!el) {
-        const next = body + prefix + suffix;
-        setBody(next);
-        pushHistory(next);
-        void updateFields({ body: next });
-        return;
-      }
-      const start = el.selectionStart ?? body.length;
-      const end = el.selectionEnd ?? body.length;
-      const val = el.value;
-      const selected = val.substring(start, end);
-      const fallback = prefix === '• ' || prefix === '[ ] ' || prefix === '### ' ? '' : 'text';
-      const replacement = `${prefix}${selected || fallback}${suffix}`;
-      const nextVal = val.substring(0, start) + replacement + val.substring(end);
-      setBody(nextVal);
-      pushHistory(nextVal);
-      void updateFields({ body: nextVal });
-      setTimeout(() => {
-        el.focus();
-        const newPos = start + replacement.length;
-        el.setSelectionRange(newPos, newPos);
-      }, 10);
-    }, 15);
-  };
-
-  // Keyboard shortcuts (Ctrl+B, Ctrl+I, Ctrl+U, Ctrl+Z, Ctrl+Y, Tab)
-  const handleTextareaKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.ctrlKey || e.metaKey) {
-      if (e.key === 'b' || e.key === 'B') {
-        e.preventDefault();
-        insertFormatting('**', '**');
-      } else if (e.key === 'i' || e.key === 'I') {
-        e.preventDefault();
-        insertFormatting('*', '*');
-      } else if (e.key === 'u' || e.key === 'U') {
-        e.preventDefault();
-        insertFormatting('<u>', '</u>');
-      } else if (e.key === 'z' || e.key === 'Z') {
-        e.preventDefault();
-        handleUndo();
-      } else if (e.key === 'y' || e.key === 'Y') {
-        e.preventDefault();
-        handleRedo();
-      }
-    } else if (e.key === 'Tab') {
-      e.preventDefault();
-      insertFormatting('  ');
-    }
-  };
-
-  // Copy note body to clipboard
-  const handleCopyNote = async () => {
-    try {
-      await navigator.clipboard.writeText(body);
-      showToast('Note copied to clipboard!');
-    } catch {
-      showToast('Copy failed');
-    }
-  };
-
   // Voice Speech-to-Text dictation toggle
   const toggleDictation = () => {
-    if (textareaRef.current) {
-      textareaRef.current.focus();
-    }
+    editorRef.current?.commands.focus();
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
       setShowVoiceModal(true);
@@ -1527,13 +1467,7 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
           }
         }
         if (final) {
-          setBody(prev => {
-            const sep = prev.length > 0 && !prev.endsWith(' ') && !prev.endsWith('\n') ? ' ' : '';
-            const next = prev + sep + final.trim();
-            pushHistory(next);
-            void updateFields({ body: next });
-            return next;
-          });
+          insertNoteText(editorRef.current, ' ' + final.trim());
         }
       };
       recognition.onerror = () => setIsListening(false);
@@ -1548,55 +1482,8 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
     }
   };
 
-  // Checklist parser & serializer
-  const parseChecklist = (raw: string) => {
-    const lines = raw.split('\n').filter(l => l.trim().length > 0);
-    return lines.map((line, idx) => {
-      const isDone = line.startsWith('[x] ') || line.startsWith('[X] ');
-      const text = line.replace(/^\[[ xX]\] /, '');
-      return { id: idx, isDone, text };
-    });
-  };
-
-  const checklistItems = parseChecklist(body);
-
-  const toggleChecklistItem = async (index: number) => {
-    const items = [...checklistItems];
-    items[index].isDone = !items[index].isDone;
-    const newBody = items.map(item => `[${item.isDone ? 'x' : ' '}] ${item.text}`).join('\n');
-    setBody(newBody);
-    pushHistory(newBody);
-    await updateFields({ body: newBody });
-  };
-
-  const handleEditChecklistItem = (index: number, newText: string) => {
-    const items = [...checklistItems];
-    items[index].text = newText;
-    const newBody = items.map(item => `[${item.isDone ? 'x' : ' '}] ${item.text}`).join('\n');
-    setBody(newBody);
-  };
-
-  const handleFinishEditChecklistItem = async () => {
-    pushHistory(body);
-    await updateFields({ body });
-  };
-
-  const addChecklistItem = async () => {
-    if (!newItemText.trim()) return;
-    const newBody = body ? `${body}\n[ ] ${newItemText.trim()}` : `[ ] ${newItemText.trim()}`;
-    setBody(newBody);
-    setNewItemText('');
-    pushHistory(newBody);
-    await updateFields({ body: newBody });
-  };
-
-  const deleteChecklistItem = async (index: number) => {
-    const items = checklistItems.filter((_, i) => i !== index);
-    const newBody = items.map(item => `[${item.isDone ? 'x' : ' '}] ${item.text}`).join('\n');
-    setBody(newBody);
-    pushHistory(newBody);
-    await updateFields({ body: newBody });
-  };
+  const checklistItems = body.split('\n').filter(line => /^\s*(?:[-*+] )?\[[ xX]\](?:\s|$)/.test(line))
+    .map(line => ({ isDone: /^\s*(?:[-*+] )?\[[xX]\]/.test(line) }));
 
   // Reminder preset setter
   const setReminderOffset = async (ms: number, label: string) => {
@@ -1636,19 +1523,6 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
     setShowReminderModal(false);
     await updateFields({ reminderAt: 0 });
     showToast('Reminder cleared');
-  };
-
-  // Link dialog submit
-  const handleInsertLink = () => {
-    const url = linkUrlInput.trim();
-    const titleText = linkTitleInput.trim();
-    if (url && url !== 'https://') {
-      const formatted = titleText ? `[${titleText}](${url})` : url;
-      insertFormatting(formatted);
-      setShowLinkModal(false);
-      setLinkTitleInput('');
-      setLinkUrlInput('https://');
-    }
   };
 
   const handleDragMouseDown = (e: React.MouseEvent) => {
@@ -1771,237 +1645,17 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
           <span className="sticky-stats-status">{saveStatus}</span>
         </div>
 
-        {/* Checklist Toggle & View Mode Row */}
-        <div className="sticky-control-row">
-          <label className="control-toggle-label">
-            <input
-              type="checkbox"
-              checked={isChecklist}
-              onChange={async e => {
-                const next = e.target.checked;
-                setIsChecklist(next);
-                if (next) {
-                  // Format raw lines into checklist items if not already formatted
-                  const lines = body.split('\n').map(l => (l.trim() && !l.startsWith('[ ] ') && !l.startsWith('[x] ') ? `[ ] ${l}` : l));
-                  const newB = lines.join('\n');
-                  setBody(newB);
-                  pushHistory(newB);
-                  await updateFields({ isChecklist: next, body: newB });
-                } else {
-                  await updateFields({ isChecklist: next });
-                }
-              }}
-            />
-            <span>To-do checklist</span>
-          </label>
-
-          {isChecklist && (
-            <button
-              className="control-mode-pill"
-              title="Toggle interactive list items vs raw markdown edit"
-              onClick={() => setIsTextMode(!isTextMode)}
-            >
-              {isTextMode ? 'Interactive View' : 'Raw Text Mode'}
-            </button>
-          )}
-
-          {/* Preview / Edit mode toggle */}
-          <button
-            className="control-mode-pill"
-            style={{
-              marginLeft: 'auto',
-              background: !isEditingBody ? 'var(--brand-violet)' : 'rgba(0,0,0,0.06)',
-              color: !isEditingBody ? '#fff' : 'currentColor',
-              fontWeight: 700,
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 4
-            }}
-            title={isEditingBody ? 'Switch to rendered markdown preview' : 'Switch to text editing mode'}
-            onClick={() => setIsEditingBody(prev => !prev)}
-          >
-            <span>{!isEditingBody ? '👁️ Rich View' : '✏️ Edit Mode'}</span>
-          </button>
-        </div>
-
-        {/* Rich Formatting Toolbar */}
-        <div className="sticky-toolbar-row" data-no-drag onMouseDown={e => e.stopPropagation()}>
-          <button
-            className="tool-btn"
-            title="Undo (Ctrl+Z)"
-            disabled={historyIdx <= 0}
-            onClick={handleUndo}
-          >
-            <RotateCcw size={13} />
-          </button>
-          <button
-            className="tool-btn"
-            title="Redo (Ctrl+Y)"
-            disabled={historyIdx >= history.length - 1}
-            onClick={handleRedo}
-          >
-            <RotateCw size={13} />
-          </button>
-
-          <div className="tool-divider" />
-
-          <button className="tool-btn" title="Bold (Ctrl+B)" onClick={() => insertFormatting('**', '**')}>
-            <Bold size={13} />
-          </button>
-          <button className="tool-btn" title="Italic (Ctrl+I)" onClick={() => insertFormatting('*', '*')}>
-            <Italic size={13} />
-          </button>
-          <button className="tool-btn" title="Underline (Ctrl+U)" onClick={() => insertFormatting('<u>', '</u>')}>
-            <Underline size={13} />
-          </button>
-          <button className="tool-btn" title="Heading" onClick={() => insertFormatting('### ')}>
-            <Heading size={13} />
-          </button>
-          <button className="tool-btn" title="Bullet List" onClick={() => insertFormatting('• ')}>
-            <List size={13} />
-          </button>
-          <button className="tool-btn" title="To-do Task" onClick={() => insertFormatting('[ ] ')}>
-            <CheckSquare size={13} />
-          </button>
-          <button
-            className="tool-btn"
-            title="Timestamp"
-            onClick={() => {
-              const stamp = new Date().toLocaleDateString([], { month: 'short', day: 'numeric' }) + ', ' +
-                new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-              insertFormatting(stamp);
-            }}
-          >
-            <Clock size={13} />
-          </button>
-
-          <div className="tool-divider" />
-
-          <button
-            className="tool-btn"
-            title="Insert Web Link"
-            onClick={async () => {
-              const el = textareaRef.current;
-              const sel = el && el.selectionStart !== el.selectionEnd ? el.value.substring(el.selectionStart, el.selectionEnd) : '';
-              if (sel) setLinkTitleInput(sel);
-              try {
-                const clip = await navigator.clipboard.readText();
-                if (clip.startsWith('http://') || clip.startsWith('https://')) {
-                  setLinkUrlInput(clip.trim());
-                }
-              } catch {}
-              setShowLinkModal(true);
-            }}
-          >
-            <LinkIcon size={13} />
-          </button>
-          <button className="tool-btn" title="Copy note text" onClick={handleCopyNote}>
-            <Copy size={13} />
-          </button>
-          <button
-            className={`tool-btn ${isListening ? 'is-recording' : ''}`}
-            title={isListening ? 'Stop recording voice' : 'Dictate note by voice'}
-            onClick={toggleDictation}
-          >
-            <Mic size={13} />
-            {isListening && <span>Rec</span>}
-          </button>
-
-          <div className="tool-divider" />
-
-          <button
-            className="tool-btn font-selector-btn"
-            title="Choose Font Style (Roboto, Cute Cursive, Rounded Sans, Serif, Mono)"
-            onClick={() => setShowFontModal(true)}
-          >
-            <Type size={13} />
-            <span style={{ fontSize: 10.5 }}>{currentFontObj.name}</span>
-          </button>
-        </div>
-
-        {/* Content Area */}
         <div className="sticky-body-area">
-          <input
-            className={`sticky-title-input ${fontClass}`}
-            placeholder="Title..."
-            value={title}
-            onChange={e => setTitle(e.target.value)}
-            onBlur={handleTitleBlur}
-            maxLength={2000}
-          />
-
-          {!isChecklist || isTextMode ? (
-            isEditingBody ? (
-              <textarea
-                ref={textareaRef}
-                className={`sticky-textarea ${fontClass}`}
-                placeholder={isChecklist ? '[ ] First task…\n[ ] Second task…' : 'Jot down a quick thought…'}
-                value={body}
-                autoFocus
-                onChange={e => setBody(e.target.value)}
-                onBlur={() => {
-                  handleBodyBlur();
-                  setIsEditingBody(false);
-                }}
-                onKeyDown={handleTextareaKeyDown}
-              />
-            ) : (
-              <div
-                className={`sticky-textarea sticky-preview ${fontClass}`}
-                title="Click to edit"
-                onClick={() => setIsEditingBody(true)}
-                style={{ cursor: 'text', whiteSpace: 'pre-wrap' }}
-                dangerouslySetInnerHTML={{ __html: body ? renderMarkdown(body) : '<span style="opacity:0.38">Jot down a quick thought…</span>' }}
-              />
-            )
-          ) : (
-            <div className="checklist-container" data-no-drag onMouseDown={e => e.stopPropagation()}>
-              {checklistItems.map((item, idx) => (
-                <div key={idx} className="checklist-item-row" data-no-drag onMouseDown={e => e.stopPropagation()}>
-                  <button
-                    type="button"
-                    className={`checklist-checkbox ${item.isDone ? 'is-checked' : ''}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void toggleChecklistItem(idx);
-                    }}
-                    title={item.isDone ? 'Mark incomplete' : 'Mark complete'}
-                  >
-                    {item.isDone && <Check size={12} strokeWidth={3} />}
-                  </button>
-                  <input
-                    className={`checklist-item-text ${item.isDone ? 'is-done' : ''} ${fontClass}`}
-                    value={item.text}
-                    onChange={e => handleEditChecklistItem(idx, e.target.value)}
-                    onBlur={handleFinishEditChecklistItem}
-                  />
-                  <button
-                    type="button"
-                    className="checklist-delete-btn"
-                    title="Delete item"
-                    onClick={() => void deleteChecklistItem(idx)}
-                  >
-                    <X size={12} />
-                  </button>
-                </div>
-              ))}
-
-              <div className="checklist-add-row">
-                <input
-                  className={`checklist-add-input ${fontClass}`}
-                  placeholder="＋ Add a task… (Enter to add)"
-                  value={newItemText}
-                  onChange={e => setNewItemText(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter') void addChecklistItem();
-                  }}
-                />
-                <button className="checklist-add-btn" onClick={addChecklistItem}>
-                  Add
-                </button>
-              </div>
-            </div>
-          )}
+          <input className={`sticky-title-input ${fontClass}`} placeholder="Title..." value={title}
+            onChange={e => { setTitle(e.target.value); void updateFields({ title: e.target.value }); }} maxLength={2000} />
+          <NoteEditor key={note.id} value={body} checklist={isChecklist} fontClass={fontClass}
+            onReady={editor => { editorRef.current = editor; }} onOpenLink={openNoteLink}
+            onChange={(body, isChecklist) => { setBody(body); setIsChecklist(isChecklist); void updateFields({ body, isChecklist }); }}
+            extraTools={<>
+              <button type="button" title={isListening ? 'Stop dictation' : 'Voice typing'} className={isListening ? 'is-recording' : ''} onClick={toggleDictation}><Mic size={15} /></button>
+              <button type="button" title="Choose note font" onClick={() => setShowFontModal(true)}><Type size={15} /></button>
+            </>} />
+          <NoteFiles noteId={note.id} files={(draftRef.current||note).attachments} onChange={async attachments=>{await updateFields({attachments});}} />
         </div>
 
         {/* Footer with Pastel Color Swatches */}
@@ -2071,47 +1725,6 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
                 </button>
                 <button className="popup-btn-primary" onClick={handleCustomReminderSubmit}>
                   Set Alarm
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* 2. Web Link Insertion Modal Overlay */}
-        {showLinkModal && (
-          <div className="note-popup-overlay" onClick={() => setShowLinkModal(false)}>
-            <div className="note-popup-card" onClick={e => e.stopPropagation()}>
-              <h3 className="popup-title">
-                <LinkIcon size={16} color="var(--brand-violet)" /> Insert Web Link
-              </h3>
-              <div>
-                <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-secondary)', display: 'block', marginBottom: 4 }}>
-                  Link Text (Optional)
-                </span>
-                <input
-                  className="popup-input"
-                  placeholder="e.g. My Website"
-                  value={linkTitleInput}
-                  onChange={e => setLinkTitleInput(e.target.value)}
-                />
-              </div>
-              <div>
-                <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-secondary)', display: 'block', marginBottom: 4 }}>
-                  Destination URL
-                </span>
-                <input
-                  className="popup-input"
-                  placeholder="https://example.com"
-                  value={linkUrlInput}
-                  onChange={e => setLinkUrlInput(e.target.value)}
-                />
-              </div>
-              <div className="popup-actions">
-                <button className="popup-btn-secondary" onClick={() => setShowLinkModal(false)}>
-                  Cancel
-                </button>
-                <button className="popup-btn-primary" onClick={handleInsertLink}>
-                  Insert
                 </button>
               </div>
             </div>
@@ -2192,11 +1805,7 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
                   className="popup-btn-primary"
                   onClick={() => {
                     if (voiceInputDraft.trim()) {
-                      const sep = body.length > 0 && !body.endsWith(' ') && !body.endsWith('\n') ? '\n' : '';
-                      const next = body + sep + voiceInputDraft.trim();
-                      setBody(next);
-                      pushHistory(next);
-                      void updateFields({ body: next });
+                      insertNoteText(editorRef.current, voiceInputDraft.trim());
                       setVoiceInputDraft('');
                       showToast('Voice note added!');
                     }
@@ -2219,7 +1828,7 @@ function FloatingNoteCard({ noteId }: { noteId?: string }) {
 // ==============================================================
 function LibraryView() {
   const notes = useNotesList();
-  const [tab, setTab] = useState<'all' | 'pinned' | 'checklists' | 'archived' | 'sync' | 'backup'>('all');
+  const [tab, setTab] = useState<'all' | 'pinned' | 'checklists' | 'archived' | 'sync' | 'backup' | 'recovery' | 'pro'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [widthFactor, setWidthFactor] = useState<number>(() => {
     return parseFloat(localStorage.getItem('sidenote_width_factor') || '0.85');
@@ -2238,7 +1847,11 @@ function LibraryView() {
   const [syncStatus, setSyncStatus] = useState('');
   const [syncBusy, setSyncBusy] = useState(false);
   const [pairingPrompt, setPairingPrompt] = useState<{ pin: string; deviceName: string } | null>(null);
+  const [invitation,setInvitation]=useState<{code:string;svg:string;fingerprint:string;expiresAt:number}|null>(null);
   const [pairedToast, setPairedToast] = useState<string | null>(null);
+  const [service,setService]=useState<{listening:boolean;peers:{deviceId:string;lastSeen:number;online:boolean}[]}>({listening:false,peers:[]});
+  useEffect(()=>{if(!native)return;let active=true;const refresh=()=>void invoke<typeof service>('lan_service_status').then(state=>{if(active)setService(state)}).catch(()=>{});refresh();const timer=setInterval(refresh,5000);return()=>{active=false;clearInterval(timer)}},[]);
+
   const [trustedPeersList, setTrustedPeersList] = useState<Array<{ deviceId: string; label: string; publicKey?: string }>>([]);
 
   const loadTrustedPeers = () => {
@@ -2278,8 +1891,8 @@ function LibraryView() {
 
   const handleGeneratePin = async () => {
     try {
-      const pin = await invoke<string>('lan_get_pairing_pin');
-      setPairingPrompt({ pin, deviceName: 'Android Mobile' });
+      const invite=await invoke<{pin:string;code:string;svg:string;fingerprint:string;expiresAt:number}>('pairing_invitation');
+      setInvitation(invite);setPairingPrompt({pin:invite.pin,deviceName:'Android Mobile'});
     } catch (e) {
       console.error(e);
     }
@@ -2307,19 +1920,10 @@ function LibraryView() {
   }, [notes, tab, searchQuery]);
 
   const handleStartSync = async () => {
-    if (!remoteAddress.trim() || sharedKey.length !== 64) return;
     setSyncBusy(true);
-    try {
-      const res = await invoke<{ applied: number; skipped: number; conflicts: number }>('lan_sync_peer', {
-        address: remoteAddress.trim(),
-        keyHex: sharedKey.trim(),
-      });
-      setSyncStatus(`Sync finished: ${res.applied} applied, ${res.skipped} up to date, ${res.conflicts} conflicts.`);
-    } catch (e) {
-      setSyncStatus('Sync error: ' + String(e));
-    } finally {
-      setSyncBusy(false);
-    }
+    try { setSyncStatus(await invoke<string>('lan_request_sync')); }
+    catch(error){setSyncStatus(String(error));}
+    finally{setSyncBusy(false);}
   };
 
   // Export all notes as a JSON file download
@@ -2464,6 +2068,8 @@ function LibraryView() {
           <button className={`library-tab-btn ${tab === 'sync' ? 'is-active' : ''}`} onClick={() => setTab('sync')}>
             <Wifi size={14} /> Sync & Devices
           </button>
+          <button className={`library-tab-btn ${tab === 'pro' ? 'is-active' : ''}`} onClick={()=>setTab('pro')}><Sparkles size={14}/>Pro</button>
+          <button className={`library-tab-btn ${tab === 'recovery' ? 'is-active' : ''}`} onClick={()=>setTab('recovery')}><RotateCcw size={14}/>Recovery</button>
           <button className={`library-tab-btn ${tab === 'backup' ? 'is-active' : ''}`} onClick={() => setTab('backup')}>
             <Download size={14} /> Backup & Tools
           </button>
@@ -2510,9 +2116,12 @@ function LibraryView() {
 
       {/* Main Body */}
       <div className="library-content-body">
-        {tab === 'backup' ? (
+        {tab === 'pro' ? <ProPanel/> : tab === 'recovery' ? <RecoveryPanel/> : tab === 'backup' ? (
           <div className="sync-pane-card">
             <h2 style={{ margin: '0 0 8px 0', fontSize: 18, fontWeight: 800 }}>Backup, Preferences & Desktop Tools</h2>
+            <div className="recovery-card"><h3>Make the edge yours</h3><p>Readable titles or a narrow compact deck. Paper notes keep peeking out of your screen edge.</p><div className="recovery-actions">{['readable','compact'].map(mode=><button key={mode} onClick={()=>{localStorage.setItem('sidenote_dock_mode',mode);window.dispatchEvent(new Event('sidenote_preferences'));void emit('sidenote_preferences_changed',{dockMode:mode});setBackupStatus(`Dock: ${mode}`)}}>{mode==='readable'?'Readable titles':'Compact vertical'}</button>)}{['playful','quiet'].map(style=><button key={style} onClick={()=>{localStorage.setItem('sidenote_paper_style',style);window.dispatchEvent(new Event('sidenote_preferences'));void emit('sidenote_preferences_changed',{paperStyle:style});setBackupStatus(`Paper: ${style}`)}}>{style==='playful'?'Soft paper':'Quiet paper'}</button>)}</div></div>
+            <div className="recovery-card"><h3>Complete notes & files backup</h3><p>A portable ZIP containing the actual attached files. Restore keeps existing versions as separate copies.</p><div className="recovery-actions">{[false,true].map(restore=><button key={String(restore)} disabled={syncBusy} onClick={async()=>{setSyncBusy(true);try{setBackupStatus(await invoke<string>('complete_backup',{restore}))}catch(e){setBackupStatus(String(e))}finally{setSyncBusy(false)}}}>{restore?'Restore complete backup':'Save complete backup'}</button>)}</div></div>
+
             <p style={{ margin: '0 0 18px 0', fontSize: 13, color: 'var(--ink-secondary)', lineHeight: 1.6 }}>
               Manage full JSON backups, switch screen edge dock position, and test audio alerts.
             </p>
@@ -2632,6 +2241,7 @@ function LibraryView() {
           </div>
         ) : tab !== 'sync' ? (
           <>
+            <details className="template-picker"><summary>Start from a little inspiration</summary><div className="recovery-actions">{NOTE_TEMPLATES.map(template=><button key={template.title} onClick={async()=>{const note={...createFreshNote(),...template};await saveNote(note);await openFloatingNote(note)}}>{template.title}</button>)}</div></details>
             <div className="library-search-bar">
               <Search size={18} color="var(--ink-secondary)" />
               <input
@@ -2700,7 +2310,7 @@ function LibraryView() {
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', background: 'rgba(34, 197, 94, 0.12)', border: '1px solid rgba(34, 197, 94, 0.3)', borderRadius: 20 }}>
                 <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />
-                <span style={{ fontSize: 12, fontWeight: 700, color: '#16a34a' }}>Sync Active</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: '#16a34a' }}>{service.listening?'Encrypted LAN service ready':'Sync service unavailable'}</span>
               </div>
             </div>
 
@@ -2716,13 +2326,14 @@ function LibraryView() {
                 <span style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 1.2, color: 'var(--brand-violet)' }}>
                   Mobile Pairing Request
                 </span>
-                <h3 style={{ margin: '8px 0 4px', fontSize: 20, fontWeight: 800 }}>Enter This PIN on Your Phone</h3>
+                <h3 style={{ margin: '8px 0 4px', fontSize: 20, fontWeight: 800 }}>Scan with SideNote on your phone</h3>
                 <p style={{ margin: '0 0 16px', fontSize: 13, color: 'var(--ink-secondary)' }}>
                   Open SideNote on your Android phone → Settings → Connect with Windows PC
                 </p>
                 <div style={{ display: 'inline-flex', gap: 14, padding: '14px 28px', background: 'var(--surface-primary)', borderRadius: 14, border: '2px solid var(--surface-border)', fontSize: 36, fontWeight: 900, letterSpacing: 10, color: 'var(--brand-violet)', fontFamily: 'monospace' }}>
                   {pairingPrompt.pin}
                 </div>
+                {invitation&&<div className="pairing-qr"><div role="img" aria-label="Secure SideNote pairing QR code" dangerouslySetInnerHTML={{__html:invitation.svg}}/><p>Expires after two minutes. Keep this setup code private.</p><button className="outline-btn" onClick={()=>void navigator.clipboard.writeText(invitation.code).then(()=>setSyncStatus('Setup code copied. Paste it into Android SideNote.')).catch(()=>setSyncStatus('Could not copy. Scan the QR instead.'))}>Copy setup code</button><details><summary>Manual pairing security fingerprint</summary><code>{invitation.fingerprint.match(/.{1,4}/g)?.join(' ')}</code></details></div>}
                 <div style={{ marginTop: 16 }}>
                   <button className="outline-btn" style={{ fontSize: 12, padding: '6px 16px' }} onClick={() => setPairingPrompt(null)}>
                     Dismiss Code
@@ -2734,15 +2345,17 @@ function LibraryView() {
                 <div>
                   <h4 style={{ margin: '0 0 4px', fontSize: 15, fontWeight: 700 }}>Pair an Android Phone</h4>
                   <p style={{ margin: 0, fontSize: 13, color: 'var(--ink-secondary)' }}>
-                    No camera or QR codes needed. Generates a 4-digit code to pair instantly.
+                    Secure QR pairing. You can also copy a setup code or use a discovered PC and verify its fingerprint.
                   </p>
                 </div>
                 <button className="primary-btn" onClick={handleGeneratePin} style={{ padding: '8px 16px' }}>
-                  <Wifi size={15} /> Show Pairing PIN
+                  <Wifi size={15} /> Pair a phone
                 </button>
               </div>
             )}
 
+            <button className="outline-btn" disabled={syncBusy || trustedPeersList.length===0} onClick={()=>void handleStartSync()}><RefreshCw size={15}/> Request sync</button>
+            {syncStatus && <p role="status" style={{fontSize:12}}>{syncStatus}</p>}
             {/* Paired Devices List */}
             <div style={{ marginBottom: 20 }}>
               <strong style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.8, color: 'var(--ink-secondary)', display: 'block', marginBottom: 10 }}>

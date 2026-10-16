@@ -1,0 +1,12 @@
+{
+  "passed": 7,
+  "checks": [
+    "Popup checkbox click persists to SQLite",
+    "Popup selected text formats and saves",
+    "Floating editor opens saved popup checkbox and formatting",
+    "Rapid title color and checklist changes preserve all fields",
+    "Full editor formats selected text and persists combined marks",
+    "No Edit/Rich mode switch remains",
+    "Reopening popup reads saved full-editor formatting"
+  ]
+}

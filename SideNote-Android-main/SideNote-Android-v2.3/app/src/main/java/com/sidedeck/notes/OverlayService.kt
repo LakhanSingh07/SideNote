@@ -61,6 +61,16 @@ class OverlayService : Service() {
         null
     }
 
+    private val syncUpdates=object:BroadcastReceiver(){override fun onReceive(context:Context?,intent:Intent?){
+        if(shuttingDown || flushDraft!=null || !::store.isInitialized)return
+        val showDeck=panel!=null
+        val windows=floatingCards.map { (id,w)->Triple(id,w.mode,w.lp.x to w.lp.y) }
+        if(showDeck)closePanel()
+        dismissAllFloatingCards()
+        val notes=safeNotes() ?: return
+        windows.forEach { (id,mode,position)->notes.firstOrNull {it.id==id}?.let {if(mode==WindowMode.MINIMIZED)openMinimizedChip(it,position)else openExpandedNote(it,position)} }
+        if(showDeck)showPanel()
+    }}
     private val channel = "sidenote_overlay"
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -133,6 +143,8 @@ class OverlayService : Service() {
         if (Build.VERSION.SDK_INT >= 34) startForeground(13, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         else startForeground(13, notification)
         LanSyncManager.startBackgroundListener(this)
+        if(Build.VERSION.SDK_INT>=33)registerReceiver(syncUpdates,IntentFilter(LanSyncManager.ACTION_SYNC_UPDATED),RECEIVER_NOT_EXPORTED)
+        else @Suppress("DEPRECATION") registerReceiver(syncUpdates,IntentFilter(LanSyncManager.ACTION_SYNC_UPDATED))
         createHandle()
     }
 
@@ -295,7 +307,7 @@ class OverlayService : Service() {
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    strip.animate().scaleX(1.0f).scaleY(1.0f).setDuration(140)
+                    strip.animate().scaleX(1.0f).scaleY(1.0f).setDuration(Ui.motionDuration(this@OverlayService,140))
                         .setInterpolator(android.view.animation.OvershootInterpolator(2.2f)).start()
                     val dx = ev.rawX - startX; val dy = ev.rawY - startY
                     val isDrag = kotlin.math.abs(dx) > threshold || kotlin.math.abs(dy) > threshold
@@ -466,7 +478,7 @@ class OverlayService : Service() {
                                     .setInterpolator(android.view.animation.DecelerateInterpolator()).start()
                             }
                             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                                v.animate().scaleX(1f).scaleY(1f).setDuration(140)
+                                v.animate().scaleX(1f).scaleY(1f).setDuration(Ui.motionDuration(this@OverlayService,140))
                                     .setInterpolator(android.view.animation.OvershootInterpolator(2.2f)).start()
                             }
                         }
@@ -475,7 +487,7 @@ class OverlayService : Service() {
                     // Staggered cascade entrance animation
                     alpha = 0f
                     translationY = Ui.dp(this@OverlayService, 14).toFloat()
-                    animate().alpha(1f).translationY(0f).setDuration(220)
+                    animate().alpha(1f).translationY(0f).setDuration(Ui.motionDuration(this@OverlayService,220))
                         .setStartDelay((idx * 35L).coerceAtMost(180L))
                         .setInterpolator(android.view.animation.DecelerateInterpolator(1.4f))
                         .start()
@@ -487,7 +499,7 @@ class OverlayService : Service() {
                 }
                 if (note.pinned) titleRow.addView(Ui.text(this, "📌 ", 10f, false, Ui.ink))
                 val titleTv = Ui.text(this, note.title.ifBlank { "Untitled" }, 12.5f, true, Ui.ink).apply {
-                    maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                    maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END
                 }
                 titleRow.addView(titleTv, LinearLayout.LayoutParams(0, -2, 1f))
 
@@ -522,6 +534,7 @@ class OverlayService : Service() {
                     })
                 }
                 card.addView(titleRow)
+                if(note.attachments.isNotEmpty())card.addView(Ui.text(this,NoteTemplates.badge(note),10f,true,Ui.violet))
 
                 // Preview text (1 line max)
                 val preview = RichTextFormatter.toPlainText(note.body).lineSequence().filter { it.isNotBlank() }.firstOrNull()
@@ -742,29 +755,32 @@ class OverlayService : Service() {
         // Overflow popup menu with sticky-note color switching, resize, opacity, edit, etc.
         overflow.setOnClickListener {
             val menuItems = listOf(
+                Ui.ThemedMenuItem(label = "Files (${note.attachments.size})", iconRes = R.drawable.ic_copy) {
+                    startActivity(Intent(this@OverlayService,AttachmentActivity::class.java).putExtra("id",note.id).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                },
                 Ui.ThemedMenuItem(label = "Edit note", iconRes = R.drawable.ic_edit) {
                     editedFloatingNoteId = note.id; openEditor(note)
                 },
                 Ui.ThemedMenuItem(label = "Change color (${Ui.colorNames[(currentColorIdx + 1) % 6]})", iconRes = R.drawable.ic_palette) {
                     currentColorIdx = (currentColorIdx + 1) % 6
-                    val updated = note.copy(color = currentColorIdx)
+                    val updated = (store.all().firstOrNull {it.id==note.id} ?: note).copy(color = currentColorIdx)
                     store.save(updated)
                     card.background = Ui.bg(Ui.colors[currentColorIdx], Ui.dp(this@OverlayService, 20).toFloat(), Ui.noteBorders[currentColorIdx])
                 },
                 Ui.ThemedMenuItem(label = if (note.pinned) "Unpin" else "Pin", iconRes = R.drawable.ic_pin) {
-                    runCatching { store.save(note.copy(pinned = !note.pinned)) }
+                    runCatching { store.save((store.all().firstOrNull {it.id==note.id} ?: note).copy(pinned = !note.pinned)) }
                 },
                 Ui.ThemedMenuItem(label = "Set reminder", iconRes = R.drawable.ic_time) {
                     val reminderItems = listOf(
                         Ui.ThemedMenuItem(label = "In 15 minutes", iconRes = R.drawable.ic_time) {
                             val rem = System.currentTimeMillis() + 15 * 60 * 1000L
-                            val updated = note.copy(reminderAt = rem)
+                            val updated = (store.all().firstOrNull {it.id==note.id} ?: note).copy(reminderAt = rem)
                             runCatching { store.save(updated); ReminderScheduler.schedule(this@OverlayService, updated) }
                             Toast.makeText(this@OverlayService, "Reminder set for 15 minutes", Toast.LENGTH_SHORT).show()
                         },
                         Ui.ThemedMenuItem(label = "In 1 hour", iconRes = R.drawable.ic_time) {
                             val rem = System.currentTimeMillis() + 60 * 60 * 1000L
-                            val updated = note.copy(reminderAt = rem)
+                            val updated = (store.all().firstOrNull {it.id==note.id} ?: note).copy(reminderAt = rem)
                             runCatching { store.save(updated); ReminderScheduler.schedule(this@OverlayService, updated) }
                             Toast.makeText(this@OverlayService, "Reminder set for 1 hour", Toast.LENGTH_SHORT).show()
                         },
@@ -776,7 +792,7 @@ class OverlayService : Service() {
                                 set(java.util.Calendar.SECOND, 0)
                             }
                             val rem = cal.timeInMillis
-                            val updated = note.copy(reminderAt = rem)
+                            val updated = (store.all().firstOrNull {it.id==note.id} ?: note).copy(reminderAt = rem)
                             runCatching { store.save(updated); ReminderScheduler.schedule(this@OverlayService, updated) }
                             Toast.makeText(this@OverlayService, "Reminder set for tomorrow 9:00 AM", Toast.LENGTH_SHORT).show()
                         },
@@ -789,7 +805,7 @@ class OverlayService : Service() {
                             Toast.makeText(this@OverlayService, "Opening date & time picker...", Toast.LENGTH_SHORT).show()
                         },
                         Ui.ThemedMenuItem(label = "Clear reminder", iconRes = R.drawable.ic_close, isDestructive = true) {
-                            val updated = note.copy(reminderAt = 0L)
+                            val updated = (store.all().firstOrNull {it.id==note.id} ?: note).copy(reminderAt = 0L)
                             runCatching { store.save(updated); ReminderScheduler.schedule(this@OverlayService, updated) }
                             Toast.makeText(this@OverlayService, "Reminder cleared", Toast.LENGTH_SHORT).show()
                         }
@@ -847,7 +863,7 @@ class OverlayService : Service() {
                     if (index >= 0) {
                         updated[index] = (if (selected) "[x] " else "[ ] ") + cb.text
                         try {
-                            store.save(note.copy(body = updated.joinToString("\n")))
+                            store.save((store.all().firstOrNull {it.id==note.id} ?: note).copy(body = updated.joinToString("\n")))
                             val currentPos = floatingCards[note.id]?.lp?.let { it.x to it.y }
                             safeNotes()?.firstOrNull { it.id == note.id }?.let { fresh ->
                                 handler.post { if (!shuttingDown) openExpandedNote(fresh, overridePosition = currentPos) }
@@ -1270,7 +1286,7 @@ class OverlayService : Service() {
                     val t = titleEdit.text.toString().trim()
                     val b = RichTextFormatter.toStorageString(bodyEdit.text)
                     if (t.isNotBlank() || b.isNotBlank()) {
-                        store.save(note.copy(
+                        store.save((store.all().firstOrNull {it.id==note.id} ?: note).copy(
                             title = t,
                             body = b,
                             isChecklist = checklistToggle.isChecked,
@@ -1329,14 +1345,14 @@ class OverlayService : Service() {
                     chosenReminderAt = System.currentTimeMillis() + 15 * 60 * 1000L
                     (reminderBtn.getChildAt(0) as? ImageView)?.imageTintList = android.content.res.ColorStateList.valueOf(Ui.violet)
                     scheduleChange()
-                    ReminderScheduler.schedule(this, note.copy(reminderAt = chosenReminderAt))
+                    ReminderScheduler.schedule(this, (store.all().firstOrNull {it.id==note.id} ?: note).copy(reminderAt = chosenReminderAt))
                     Toast.makeText(this, "Reminder set for 15 minutes", Toast.LENGTH_SHORT).show()
                 },
                 Ui.ThemedMenuItem(label = "In 1 hour", iconRes = R.drawable.ic_time) {
                     chosenReminderAt = System.currentTimeMillis() + 60 * 60 * 1000L
                     (reminderBtn.getChildAt(0) as? ImageView)?.imageTintList = android.content.res.ColorStateList.valueOf(Ui.violet)
                     scheduleChange()
-                    ReminderScheduler.schedule(this, note.copy(reminderAt = chosenReminderAt))
+                    ReminderScheduler.schedule(this, (store.all().firstOrNull {it.id==note.id} ?: note).copy(reminderAt = chosenReminderAt))
                     Toast.makeText(this, "Reminder set for 1 hour", Toast.LENGTH_SHORT).show()
                 },
                 Ui.ThemedMenuItem(label = "Tomorrow (9:00 AM)", iconRes = R.drawable.ic_time) {
@@ -1349,7 +1365,7 @@ class OverlayService : Service() {
                     chosenReminderAt = cal.timeInMillis
                     (reminderBtn.getChildAt(0) as? ImageView)?.imageTintList = android.content.res.ColorStateList.valueOf(Ui.violet)
                     scheduleChange()
-                    ReminderScheduler.schedule(this, note.copy(reminderAt = chosenReminderAt))
+                    ReminderScheduler.schedule(this, (store.all().firstOrNull {it.id==note.id} ?: note).copy(reminderAt = chosenReminderAt))
                     Toast.makeText(this, "Reminder set for tomorrow 9:00 AM", Toast.LENGTH_SHORT).show()
                 },
                 Ui.ThemedMenuItem(label = "Pick custom date & time (in app)", iconRes = R.drawable.ic_time) {
@@ -1364,7 +1380,7 @@ class OverlayService : Service() {
                     chosenReminderAt = 0L
                     (reminderBtn.getChildAt(0) as? ImageView)?.imageTintList = android.content.res.ColorStateList.valueOf(Ui.ink)
                     scheduleChange()
-                    ReminderScheduler.schedule(this, note.copy(reminderAt = 0L))
+                    ReminderScheduler.schedule(this, (store.all().firstOrNull {it.id==note.id} ?: note).copy(reminderAt = 0L))
                     Toast.makeText(this, "Reminder cleared", Toast.LENGTH_SHORT).show()
                 }
             )
@@ -1674,6 +1690,7 @@ class OverlayService : Service() {
 
     override fun onDestroy() {
         shuttingDown = true
+        runCatching {unregisterReceiver(syncUpdates)}
         handler.removeCallbacksAndMessages(null)
         if (!closePanel(animated = false)) android.util.Log.e("SideNote", "Draft save failed during shutdown")
         dismissAllFloatingCards()

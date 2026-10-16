@@ -1,13 +1,19 @@
-Overlay design verification - 2026-10-16
+Same-note expansion and overflow verification - 2026-10-16
 
-- Visual references inspected: https://www.apptorium.com/sidenotes/tips/how-to-mark-notes-with-colors and https://sticky.scribely.site/ . Public reference images retained under src-tauri/target/design-references.
-- Replaced folded-corner decoration and separate floating footer buttons with flat pastel paper tabs, a shared neutral edge rail, and matching footer controls.
-- All paper tabs protrude 6.48 logical pixels beyond the background rectangle on the tested display. Titles and footer icons remain in one aligned column.
-- Restored the plus button to original purple #8B4CFF with a white icon.
-- The popup opens to the left of the rail with a 10.8-logical-pixel gutter. Bounding-box checks confirm clearance from every lower note and footer control, and the selected title stays visible.
-- An invisible hover bridge preserves input while crossing the popup gutter; verified with a real Windows mouse.
-- TypeScript/Vite and release builds passed. Hover, drag, cancel, quick release and five repeat hover cycles recorded zero native resizes. See results.json.
-- Native checks passed for click-through, visible-note input, gutter crossing, and fixed native canvas bounds during real dragging.
-- Actual Windows screenshots native-hover.png and native-drag.png inspected for alignment, popup separation and stationary sidebar.
-- Desktop, installed, root and acceptance-kit executable SHA-256: 4EF45DE6D4D635097FADC009794DB1D181C3E55760E5856BE4F3159F6C75B057.
-- Desktop EXE restarted without debugging enabled; second launch exited with code 0 and one process remained. See deployment.json.
+- TypeScript/Vite production build and release executable build passed.
+- Hover expands the same edge-attached note. The compact preview is hidden while expanded; lower tabs, the rail background and footer move down to preserve spacing.
+- Collapsed headings wrap into vertical columns, with the full text also available in the title tooltip. Expanded headings wrap horizontally without ellipsis; the tested long heading was fully visible.
+- Removed the four-note data and creation limit. Four notes remain visible at a time; wheel navigation moves through the complete ordered list with top/bottom arrow buttons and wheel navigation; the numeric range indicator is removed. Text editor scrolling does not change the note page.
+- Existing eleven-note data reached notes beyond the fourth through wheel scrolling.
+- Renderer-only seven-note fixtures verified reaching the seventh note, clamping at the end, scrolling back, and showing the complete long heading. No temporary notes were written to the database; a reload restored original state and timers.
+- Hover, left drag, cancel, quick release and five repeat hover cycles produced zero resize events. Native mouse checks passed for input, click-through and stable canvas bounds.
+- Purple plus button retained. Creating notes has no four-note guard; new notes are revealed at the start of the list.
+- Desktop, installed, root and acceptance-kit EXEs have SHA-256 7B5F44A4BFC0E98CF514B782552E9FFBDBC03812A8BE7AFB2C55C0505197DF8A.
+- Desktop EXE restarted without debugging enabled; repeated launch left one process. See deployment.json and results.json.
+
+- Reference-style background: off-white #fffefd, soft layered shadow, and a larger lower-left rounded corner.
+- Arrow-click fixture checks passed in both directions, including disabled boundaries; native input areas for both arrows verified. Same-note expansion, long titles, wheel navigation, drag and click-through regression checks also passed.
+
+- Downward-drag regression reproduced on the previous executable: first-to-fourth real mouse reorder stopped after its first swap.
+- Fixed capture ownership by capturing the stable dock frame instead of a tab/grip that React moves during reordering.
+- The same real mouse regression now passes first-to-fourth and fourth-to-first, preserving all off-screen note IDs. Temporary renderer state, cursor position and the exact original stored order are restored after testing.

@@ -1,0 +1,37 @@
+{
+  "suites": [
+    {
+      "suite": "com.sidedeck.notes.AttachmentTest",
+      "tests": 5,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "com.sidedeck.notes.SideNoteAcceptanceTest",
+      "tests": 15,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "com.sidedeck.notes.SyncRegressionTest",
+      "tests": 13,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "com.sidedeck.notes.SyncStoreTest",
+      "tests": 5,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "com.sidedeck.notes.WindowsInteropTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 1
+    }
+  ],
+  "executed": 38,
+  "failures": 0,
+  "optInInteropSkippedInNormalRun": true
+}

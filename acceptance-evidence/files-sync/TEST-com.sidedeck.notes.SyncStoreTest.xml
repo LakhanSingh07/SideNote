@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.sidedeck.notes.SyncStoreTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-10-16T10:38:10" hostname="LAKHANSINGH" time="0.417">
+  <properties/>
+  <testcase name="testImportBundleAppliesUpsert" classname="com.sidedeck.notes.SyncStoreTest" time="0.087"/>
+  <testcase name="testRecordUpsertAndExport" classname="com.sidedeck.notes.SyncStoreTest" time="0.107"/>
+  <testcase name="testExportBundleEmpty" classname="com.sidedeck.notes.SyncStoreTest" time="0.056"/>
+  <testcase name="testConflictPreservationOnConcurrentEdit" classname="com.sidedeck.notes.SyncStoreTest" time="0.092"/>
+  <testcase name="testImportBundleIdempotencySkipsSeen" classname="com.sidedeck.notes.SyncStoreTest" time="0.073"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

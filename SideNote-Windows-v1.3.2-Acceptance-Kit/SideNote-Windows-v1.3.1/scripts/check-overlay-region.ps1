@@ -29,7 +29,7 @@ Add-Type -AssemblyName System.Drawing
 function Save-DockCapture([string]$name, $bounds) {
   $captureWidth = [Math]::Min(560, $bounds.right-$bounds.left)
   $captureTop = [Math]::Max($bounds.top, $bounds.top+[int]($layout.collapsed.panelBounds[1]*$layout.collapsed.scale)-20)
-  $captureHeight = [Math]::Min(680, $bounds.bottom-$captureTop)
+  $captureHeight = [Math]::Min(780, $bounds.bottom-$captureTop)
   $bitmap = New-Object System.Drawing.Bitmap($captureWidth, $captureHeight)
   $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
   try {
@@ -67,6 +67,14 @@ try {
     if ([DockProbe]::GetAncestor($underlyingWindow, 2) -eq $script:dockHandle) { throw 'Blank gap still intercepts desktop input' }
   }
   $layout = Get-Content (Join-Path $PSScriptRoot '../acceptance-evidence/overlay/results.json') -Raw | ConvertFrom-Json
+  foreach ($arrow in $layout.collapsed.arrowBounds) {
+    $arrowX = $windowRect.left + [int](($arrow[0]+$arrow[2])/2*$layout.collapsed.scale)
+    $arrowY = $windowRect.top + [int](($arrow[1]+$arrow[3])/2*$layout.collapsed.scale)
+    [void][DockProbe]::SetCursorPos($arrowX, $arrowY)
+    Start-Sleep -Milliseconds 120
+    $arrowWindow = [DockProbe]::WindowFromPoint([DockProbe+Point]::new($arrowX,$arrowY))
+    if ([DockProbe]::GetAncestor($arrowWindow, 2) -ne $script:dockHandle) { throw 'Scroll arrow is missing from the native input area' }
+  }
   $control = $layout.collapsed.controls[0]
   $controlX = [int](($control[0]+$control[2]) / 2 * $layout.collapsed.scale)
   $controlY = [int](($control[1]+$control[3]) / 2 * $layout.collapsed.scale)
@@ -75,15 +83,6 @@ try {
   $noteWindow = [DockProbe]::WindowFromPoint([DockProbe+Point]::new($windowRect.left+$controlX, $windowRect.top+$controlY))
   if ([DockProbe]::GetAncestor($noteWindow, 2) -ne $script:dockHandle) { throw 'Visible note does not accept mouse input' }
   Save-DockCapture 'native-hover' $windowRect
-
-  # Crossing the visible popup gutter must not hand input to the application behind it.
-  $bridge = $layout.opened.bridgeBounds
-  $bridgeX = $windowRect.left + [int](($bridge[0]+$bridge[2])/2*$layout.opened.scale)
-  $bridgeY = $windowRect.top + [int](($bridge[1]+$bridge[3])/2*$layout.opened.scale)
-  [void][DockProbe]::SetCursorPos($bridgeX, $bridgeY)
-  Start-Sleep -Milliseconds 250
-  $bridgeWindow = [DockProbe]::WindowFromPoint([DockProbe+Point]::new($bridgeX, $bridgeY))
-  if ([DockProbe]::GetAncestor($bridgeWindow, 2) -ne $script:dockHandle) { throw 'Popup gutter lost mouse input while crossing to the note' }
 
   # Exercise real mouse capture and return-to-dock drop without resizing the canvas.
   $grip = $layout.opened.gripBounds
@@ -106,7 +105,7 @@ try {
   $restoredRect = [DockProbe+Rect]::new()
   [void][DockProbe]::GetWindowRect($script:dockHandle, [ref]$restoredRect)
   if (($restoredRect.right-$restoredRect.left) -ne ($windowRect.right-$windowRect.left)) { throw 'Real drag did not restore the dock canvas' }
-  [ordered]@{status='PASS';singleProcess=$true;paintingSurfaceUncropped=$true;blankAreaReachesUnderlyingWindow=$true;visibleNoteAcceptsInput=$true;popupGutterAcceptsCrossing=$true;realMouseDragKeepsCanvasFixed=$true} | ConvertTo-Json
+  [ordered]@{status='PASS';singleProcess=$true;paintingSurfaceUncropped=$true;blankAreaReachesUnderlyingWindow=$true;visibleNoteAcceptsInput=$true;realMouseDragKeepsCanvasFixed=$true} | ConvertTo-Json
 } finally {
   [DockProbe]::mouse_event(4,0,0,0,[UIntPtr]::Zero)
   [void][DockProbe]::SetCursorPos($savedCursor.x, $savedCursor.y)

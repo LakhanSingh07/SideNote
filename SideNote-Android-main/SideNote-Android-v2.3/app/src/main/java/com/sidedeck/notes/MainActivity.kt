@@ -47,6 +47,7 @@ class MainActivity : Activity() {
 
     private val syncReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
+            if(intent?.action==SyncHealth.ACTION){updateConnectionLabels();return}
             if (page == "Notes" || page == "Archive") {
                 renderNotes(page == "Archive")
             } else if (page == "Settings") {
@@ -64,9 +65,9 @@ class MainActivity : Activity() {
 
         try {
             if (Build.VERSION.SDK_INT >= 33) {
-                registerReceiver(syncReceiver, android.content.IntentFilter(LanSyncManager.ACTION_SYNC_UPDATED), RECEIVER_NOT_EXPORTED)
+                registerReceiver(syncReceiver, android.content.IntentFilter(LanSyncManager.ACTION_SYNC_UPDATED).apply {addAction(SyncHealth.ACTION)}, RECEIVER_NOT_EXPORTED)
             } else {
-                registerReceiver(syncReceiver, android.content.IntentFilter(LanSyncManager.ACTION_SYNC_UPDATED))
+                registerReceiver(syncReceiver, android.content.IntentFilter(LanSyncManager.ACTION_SYNC_UPDATED).apply {addAction(SyncHealth.ACTION)})
             }
         } catch (_: Exception) {}
 
@@ -138,6 +139,17 @@ class MainActivity : Activity() {
     }
 
     private fun captureSharedText(incoming: Intent?) {
+        if(incoming?.action==Intent.ACTION_SEND || incoming?.action==Intent.ACTION_SEND_MULTIPLE) {
+            @Suppress("DEPRECATION") val single=incoming?.getParcelableExtra<android.net.Uri>(Intent.EXTRA_STREAM)
+            @Suppress("DEPRECATION") val multiple=incoming?.getParcelableArrayListExtra<android.net.Uri>(Intent.EXTRA_STREAM)
+            val files=multiple ?: arrayListOf<android.net.Uri>().apply {if(single!=null)add(single)}
+            if(files.isNotEmpty()) {
+                val note=store.fresh().copy(title="Shared files",body=incoming?.getStringExtra(Intent.EXTRA_TEXT).orEmpty());store.save(note)
+                startActivity(Intent(this,AttachmentActivity::class.java).putExtra("id",note.id).putParcelableArrayListExtra("files",files)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION).apply {clipData=incoming?.clipData ?: android.content.ClipData.newRawUri("File",files[0])})
+                incoming?.action=null;return
+            }
+        }
         if (incoming?.action == Intent.ACTION_SEND && incoming.type?.startsWith("text/") == true) {
             val text = incoming.getStringExtra(Intent.EXTRA_TEXT).orEmpty()
             if (text.isNotBlank()) runCatching { store.save(store.fresh().copy(title = "Shared note", body = text)) }
@@ -287,6 +299,7 @@ class MainActivity : Activity() {
                 elevation = Ui.dp(this@MainActivity, 5).toFloat()
                 isClickable = true; isFocusable = true; contentDescription = "Create note"
                 setOnClickListener { NoteEditor.show(this@MainActivity, store, store.fresh()) { navigate(page) } }
+                setOnLongClickListener {NoteTemplates.choose(this@MainActivity,store){navigate(page)};true}
                 addView(Ui.icon(this@MainActivity, R.drawable.ic_add, 28, Ui.onAccent), FrameLayout.LayoutParams(Ui.dp(this@MainActivity, 28), Ui.dp(this@MainActivity, 28), Gravity.CENTER))
             }
             fabCol.addView(plus, Ui.lp(this, 56, 56))
@@ -343,8 +356,9 @@ class MainActivity : Activity() {
 
         val isPaired = LanSyncManager.isPaired(this)
         val pcName = LanSyncManager.getPairedPcName(this) ?: "Windows PC"
-        val syncLabel = if (isPaired) "🟢 $pcName" else "📶 Windows Sync"
+        val syncLabel = if (isPaired) "${SyncHealth.label(this)} $pcName" else "📶 Windows Sync"
         val tag = Ui.text(this, syncLabel, 11.5f, true, if (isPaired) Color.rgb(46, 125, 50) else Ui.violet).apply {
+            this.tag="sync-state-tag"
             background = Ui.bg(if (isPaired) 0x224CAF50.toInt() else Ui.subtle, Ui.dp(this@MainActivity, 12).toFloat(), if (isPaired) 0x664CAF50.toInt() else Ui.border)
             setPadding(Ui.dp(this@MainActivity, 12), Ui.dp(this@MainActivity, 6), Ui.dp(this@MainActivity, 12), Ui.dp(this@MainActivity, 6))
             isClickable = true
@@ -358,47 +372,13 @@ class MainActivity : Activity() {
     private fun showNotes(archived: Boolean) {
         shell(!archived, if (archived) "Archive" else "Notes") { body ->
             topBrand(body)
-            body.addView(Ui.space(this, 16))
-
-            // Prominent Wi-Fi sync banner
-            val isPaired = LanSyncManager.isPaired(this)
-            val pcName = LanSyncManager.getPairedPcName(this) ?: "Windows PC"
-            val bannerCard = Ui.surfaceCard(this, if (isPaired) (if (Ui.dark) 0xFF142417.toInt() else 0xFFEAF7EB.toInt()) else (if (Ui.dark) 0xFF231E33.toInt() else 0xFFF3EEFD.toInt())).apply {
-                isClickable = true
-                isFocusable = true
-                setOnClickListener {
-                    if (isPaired) {
-                        Toast.makeText(this@MainActivity, "Syncing with $pcName...", Toast.LENGTH_SHORT).show()
-                        LanSyncManager.triggerSync(this@MainActivity) { _, msg ->
-                            Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
-                            navigate(page)
-                        }
-                    } else {
-                        showPairingDialog()
-                    }
-                }
-            }
-            val bannerRow = Ui.row(this).apply { gravity = Gravity.CENTER_VERTICAL }
-            val bannerIcon = Ui.text(this, if (isPaired) "🟢" else "📶", 18f)
-            bannerRow.addView(bannerIcon)
-            bannerRow.addView(Ui.space(this, 10))
-            val bannerTexts = Ui.column(this)
-            if (isPaired) {
-                bannerTexts.addView(Ui.text(this, "Connected to $pcName (Tap to Sync Now)", 13.5f, true, if (Ui.dark) Color.WHITE else Color.rgb(27, 94, 32)))
-                bannerTexts.addView(Ui.text(this, "Notes sync automatically over Wi-Fi • Tap to force sync", 11.5f, false, Ui.muted))
-            } else {
-                bannerTexts.addView(Ui.text(this, "Connect with Windows PC (Tap to Enter PIN)", 13.5f, true, Ui.violet))
-                bannerTexts.addView(Ui.text(this, "Enter 4-digit PIN to sync notes over same Wi-Fi (No QR required)", 11.5f, false, Ui.muted))
-            }
-            bannerRow.addView(bannerTexts, LinearLayout.LayoutParams(0, -2, 1f))
-            bannerCard.addView(bannerRow)
-            body.addView(bannerCard)
-            body.addView(Ui.space(this, 16))
+            body.addView(Ui.space(this, 24))
 
             body.addView(Ui.editorial(this, if (archived) "Kept for later." else "Make space for\nyour little thoughts.", 34f))
             body.addView(Ui.space(this, 8))
             body.addView(Ui.text(this, if (archived) "Notes you tucked away." else "A calm place for everything on your mind.", 14f, false, Ui.muted))
             body.addView(Ui.space(this, 24))
+            body.addView(Ui.secondary(this,"Start from a template"){NoteTemplates.choose(this,store){navigate(page)}});body.addView(Ui.space(this,16))
             val searchWrap = Ui.row(this).apply {
                 background = Ui.bg(Ui.card, Ui.dp(this@MainActivity, 16).toFloat(), Ui.border)
                 setPadding(Ui.dp(this@MainActivity, 14), 0, Ui.dp(this@MainActivity, 14), 0)
@@ -515,7 +495,7 @@ class MainActivity : Activity() {
                         val lineIndex = currentLines.indexOf(line)
                         if (lineIndex >= 0) {
                             currentLines[lineIndex] = (if (cb.isChecked) "[x] " else "[ ] ") + taskClean
-                            val updated = note.copy(body = currentLines.joinToString("\n"))
+                            val updated = (store.all().firstOrNull {it.id==note.id} ?: note).copy(body = currentLines.joinToString("\n"))
                             updateNote(updated)
                         }
                     }
@@ -546,7 +526,7 @@ class MainActivity : Activity() {
 
             box.addView(Ui.space(this, 14))
             val bottom = Ui.row(this).apply { gravity = Gravity.CENTER_VERTICAL }
-            val typeLabel = if (note.pinned) "●  Pinned" else if (note.isChecklist) "To-do list" else "Note"
+            val typeLabel = NoteTemplates.badge(note)
             bottom.addView(Ui.text(this, typeLabel, 11f, true, Ui.muted))
 
             if (note.reminderAt > 0L) {
@@ -577,10 +557,10 @@ class MainActivity : Activity() {
     private fun openNoteActions(anchor: View, note: Note) {
         val items = listOf(
             Ui.ThemedMenuItem(label = if (note.pinned) "Unpin note" else "Pin note", iconRes = R.drawable.ic_pin) {
-                updateNote(note.copy(pinned = !note.pinned))
+                updateNote((store.all().firstOrNull {it.id==note.id} ?: note).copy(pinned = !note.pinned))
             },
             Ui.ThemedMenuItem(label = if (note.archived) "Restore note" else "Archive note", iconRes = R.drawable.ic_nav_archive) {
-                updateNote(note.copy(archived = !note.archived))
+                updateNote((store.all().firstOrNull {it.id==note.id} ?: note).copy(archived = !note.archived))
             },
             Ui.ThemedMenuItem(label = "Set reminder", iconRes = R.drawable.ic_time) {
                 reminderDialog(note)
@@ -595,7 +575,7 @@ class MainActivity : Activity() {
                     .setNegativeButton("Keep", null).setPositiveButton("Delete") { _, _ ->
                         try {
                             store.delete(note.id)
-                            ReminderScheduler.schedule(this, note.copy(reminderAt = 0L))
+                            ReminderScheduler.schedule(this, (store.all().firstOrNull {it.id==note.id} ?: note).copy(reminderAt = 0L))
                             renderNotes(page == "Archive")
                         } catch (e: Exception) { Toast.makeText(this, "Delete failed", Toast.LENGTH_SHORT).show() }
                     }.show()
@@ -641,6 +621,8 @@ class MainActivity : Activity() {
                 themeRow.addView(btn, LinearLayout.LayoutParams(0, Ui.dp(this, 48), 1f).apply { marginEnd = Ui.dp(this@MainActivity, 7) })
             }
             body.addView(themeRow); body.addView(Ui.space(this, 30))
+            body.addView(CheckBox(this).apply {text="Reduce motion";setTextColor(Ui.ink);isChecked=pref.getBoolean("reduce_motion",false);setOnCheckedChangeListener {_,checked->pref.edit().putBoolean("reduce_motion",checked).apply();refreshOverlayAppearance()}})
+
             body.addView(Ui.text(this, "FLOATING NOTES", 11f, true, Ui.muted)); body.addView(Ui.space(this, 12))
             body.addView(settingRow(if (Settings.canDrawOverlays(this)) "✓  Floating access enabled" else "Enable floating notes", "Show notes on top of supported apps") {
                 startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
@@ -666,16 +648,16 @@ class MainActivity : Activity() {
             val pcName = LanSyncManager.getPairedPcName(this) ?: "Windows PC"
             if (isPaired) {
                 val syncCard = Ui.surfaceCard(this, Ui.card)
-                syncCard.addView(Ui.text(this, "🟢 Connected to $pcName", 15f, true, Ui.ink))
+                syncCard.addView(Ui.text(this, "${SyncHealth.label(this)} $pcName", 15f, true, Ui.ink))
                 syncCard.addView(Ui.space(this, 4))
-                syncCard.addView(Ui.text(this, "Live Wi-Fi sync active • Notes sync automatically across devices.", 13f, false, Ui.muted))
+                syncCard.addView(Ui.text(this, SyncHealth.detail(this), 13f, false, Ui.muted))
                 syncCard.addView(Ui.space(this, 14))
                 val btnRow = Ui.row(this)
                 val syncBtn = Ui.button(this, "Sync Now") {
                     Toast.makeText(this, "Syncing with $pcName...", Toast.LENGTH_SHORT).show()
                     LanSyncManager.triggerSync(this) { success, msg ->
                         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
-                        if (page == "Settings") showSettings()
+                        if (page == "Settings") showSettings() else navigate(page)
                     }
                 }
                 btnRow.addView(syncBtn, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = Ui.dp(this@MainActivity, 8) })
@@ -695,12 +677,16 @@ class MainActivity : Activity() {
                 syncCard.addView(btnRow)
                 body.addView(syncCard)
             } else {
-                body.addView(settingRow("Connect with Windows PC", "Pair over local Wi-Fi using 4-digit PIN (Zero QR code)") {
+                body.addView(settingRow("Connect with Windows PC", "Secure QR pairing, saved PCs and device switching") {
                     showPairingDialog()
                 })
             }
             body.addView(Ui.space(this, 28))
 
+            body.addView(settingRow(if(BuildConfig.ANDROID_FREE_BETA)"Early access" else "SideNote Pro",ProAccess.status(this).message){startActivity(Intent(this,ProActivity::class.java))});body.addView(Ui.space(this,12))
+            body.addView(settingRow("Manage connected PCs", "Pair, switch or forget a computer") {showPairingDialog()});body.addView(Ui.space(this,12))
+            body.addView(settingRow("Trash & sync review", "Restore deleted notes and choose between conflicting versions") {startActivity(Intent(this,RecoveryActivity::class.java))});body.addView(Ui.space(this,12))
+            body.addView(settingRow("Complete backup & restore", "Notes and attached files in a portable ZIP") {startActivity(Intent(this,BackupActivity::class.java))});body.addView(Ui.space(this,20))
             body.addView(Ui.text(this, "DATA & PRIVACY", 11f, true, Ui.muted)); body.addView(Ui.space(this, 12))
             body.addView(settingRow("Export my notes", "Save a JSON backup to a folder you choose") {
                 startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply { type = "application/json"; addCategory(Intent.CATEGORY_OPENABLE); putExtra(Intent.EXTRA_TITLE, "sidenote-backup.json") }, backupExport)
@@ -715,86 +701,15 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun showPairingDialog() {
-        val dialogView = Ui.column(this).apply {
-            setPadding(Ui.dp(this@MainActivity, 20), Ui.dp(this@MainActivity, 16), Ui.dp(this@MainActivity, 20), Ui.dp(this@MainActivity, 16))
-        }
-        val statusText = Ui.text(this, "Searching for Windows PC on Wi-Fi...", 13f, false, Ui.muted)
-        dialogView.addView(statusText)
-        dialogView.addView(Ui.space(this, 12))
-
-        val ipInput = EditText(this).apply {
-            hint = "Windows PC IP (e.g. 192.168.1.15)"
-            setText(getSharedPreferences("sidenote_sync", MODE_PRIVATE).getString("last_pc_ip", ""))
-            setSingleLine()
-            background = Ui.bg(Ui.field, Ui.dp(this@MainActivity, 10).toFloat(), Ui.border)
-            setPadding(Ui.dp(this@MainActivity, 12), Ui.dp(this@MainActivity, 10), Ui.dp(this@MainActivity, 12), Ui.dp(this@MainActivity, 10))
-            setTextColor(Ui.ink)
-            setHintTextColor(Ui.muted)
-        }
-        dialogView.addView(ipInput)
-        dialogView.addView(Ui.space(this, 10))
-
-        val pinInput = EditText(this).apply {
-            hint = "Enter 4-digit PIN shown on PC"
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER
-            filters = arrayOf(android.text.InputFilter.LengthFilter(4))
-            textSize = 20f
-            typeface = android.graphics.Typeface.MONOSPACE
-            gravity = Gravity.CENTER
-            background = Ui.bg(Ui.field, Ui.dp(this@MainActivity, 10).toFloat(), Ui.border)
-            setPadding(Ui.dp(this@MainActivity, 12), Ui.dp(this@MainActivity, 12), Ui.dp(this@MainActivity, 12), Ui.dp(this@MainActivity, 12))
-            setTextColor(Ui.ink)
-            setHintTextColor(Ui.muted)
-        }
-        dialogView.addView(pinInput)
-
-        val alert = AlertDialog.Builder(this)
-            .setTitle("Pair with Windows PC")
-            .setView(dialogView)
-            .setPositiveButton("Connect", null)
-            .setNegativeButton("Cancel", null)
-            .create()
-
-        alert.setOnShowListener {
-            val connectBtn = alert.getButton(AlertDialog.BUTTON_POSITIVE)
-            connectBtn.setOnClickListener {
-                val ip = ipInput.text.toString().trim()
-                val pin = pinInput.text.toString().trim()
-                if (ip.isBlank()) {
-                    Toast.makeText(this, "Please enter PC IP address", Toast.LENGTH_SHORT).show()
-                    return@setOnClickListener
-                }
-                if (pin.length != 4) {
-                    Toast.makeText(this, "Please enter 4-digit PIN", Toast.LENGTH_SHORT).show()
-                    return@setOnClickListener
-                }
-                connectBtn.isEnabled = false
-                connectBtn.text = "Connecting..."
-                LanSyncManager.pairWithPin(this, ip, pin) { success, msg ->
-                    connectBtn.isEnabled = true
-                    connectBtn.text = "Connect"
-                    Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
-                    if (success) {
-                        alert.dismiss()
-                        if (page == "Settings") showSettings()
-                    }
-                }
-            }
-        }
-
-        alert.show()
-
-        LanSyncManager.discoverPc(this) { discovered ->
-            if (discovered != null) {
-                statusText.text = "Found ${discovered.name} (${discovered.ip})!"
-                statusText.setTextColor(Ui.violet)
-                ipInput.setText(discovered.ip)
-            } else {
-                statusText.text = "PC not discovered automatically. Check Wi-Fi or enter PC IP."
-            }
-        }
+    private fun updateConnectionLabels(){
+        val name=LanSyncManager.getPairedPcName(this) ?: "Windows PC"
+        val root=window.decorView
+        root.findViewWithTag<TextView>("sync-state-tag")?.text=SyncHealth.label(this)+" "+name
+        root.findViewWithTag<TextView>("sync-title")?.text=SyncHealth.label(this)+" - "+name
+        root.findViewWithTag<TextView>("sync-detail")?.text=SyncHealth.detail(this)
     }
+
+    private fun showPairingDialog() {startActivity(Intent(this,PairingActivity::class.java))}
 
     private fun reminderDialog(note: Note) {
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -804,7 +719,7 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this).setTitle("Remind me about ${note.title.ifBlank { "this note" }}").setItems(choices) { _, index ->
             if (index == 3) {
                 DateTimePickerHelper.pickDateTime(this, note.reminderAt) { chosenMillis ->
-                    val updated = note.copy(reminderAt = chosenMillis)
+                    val updated = (store.all().firstOrNull {it.id==note.id} ?: note).copy(reminderAt = chosenMillis)
                     store.save(updated)
                     ReminderScheduler.schedule(this, updated)
                     renderNotes(page == "Archive")
@@ -827,7 +742,7 @@ class MainActivity : Activity() {
                 }
                 else -> 0L
             }
-            val updated = note.copy(reminderAt = updatedReminderAt)
+            val updated = (store.all().firstOrNull {it.id==note.id} ?: note).copy(reminderAt = updatedReminderAt)
             try {
                 store.save(updated)
                 ReminderScheduler.schedule(this, updated)

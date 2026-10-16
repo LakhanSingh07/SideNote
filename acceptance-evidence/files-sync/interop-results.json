@@ -1,0 +1,20 @@
+{
+  "status": "PASS",
+  "androidRuntime": "Robolectric executing production Android sync code",
+  "windowsRuntime": "Packaged Windows EXE",
+  "bytesEachDirection": 12582912,
+  "elapsedSeconds": 15,
+  "uploadSha256": "1b92a3f8fe27441ec2cd06f60677db293ff3bb3963ff45f596d1db4842c6060e",
+  "downloadSha256": "5649ac3525778adea3c8e7943418b9af5c0c50b99b445ab2659aba742547c2fb",
+  "checks": [
+    "Windows file import preserves arbitrary binary bytes",
+    "Android-to-Windows file upload resumes from an existing chunk",
+    "Windows-to-Android download resumes from an existing partial file",
+    "SHA-256 matches in both directions",
+    "Android edits reach Windows",
+    "Windows edits reach Android",
+    "Sequential edits do not create false conflicts",
+    "Android delete reaches Windows without an echo",
+    "Existing Windows notes remain unchanged"
+  ]
+}

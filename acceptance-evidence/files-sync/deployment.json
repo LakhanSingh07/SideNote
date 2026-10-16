@@ -1,0 +1,38 @@
+﻿{
+    "singleProcess":  true,
+    "timestamp":  "2026-10-16T16:12:49.9538982+05:30",
+    "physicalAndroidDeviceDetected":  false,
+    "windows":  [
+                    {
+                        "Path":  "C:\\Users\\lakha\\Desktop\\sidenote-windows.exe",
+                        "Hash":  "966730500994A0F1CF9077BFBB9FB62E7B13EE58B0B7AF64310BF28B290D3A0A"
+                    },
+                    {
+                        "Path":  "C:\\Users\\lakha\\AppData\\Local\\SideNote\\sidenote-windows.exe",
+                        "Hash":  "966730500994A0F1CF9077BFBB9FB62E7B13EE58B0B7AF64310BF28B290D3A0A"
+                    },
+                    {
+                        "Path":  "C:\\Users\\lakha\\Videos\\SideNote-Android-main\\sidenote-windows.exe",
+                        "Hash":  "966730500994A0F1CF9077BFBB9FB62E7B13EE58B0B7AF64310BF28B290D3A0A"
+                    },
+                    {
+                        "Path":  "C:\\Users\\lakha\\Videos\\SideNote-Android-main\\SideNote-Windows-v1.3.2-Acceptance-Kit\\sidenote-windows.exe",
+                        "Hash":  "966730500994A0F1CF9077BFBB9FB62E7B13EE58B0B7AF64310BF28B290D3A0A"
+                    }
+                ],
+    "status":  "PASS",
+    "android":  [
+                    {
+                        "Path":  "C:\\Users\\lakha\\Videos\\SideNote-Android-main\\SideNote-Android-v3.1.0.apk",
+                        "Hash":  "21B411015E44A0238FBBDC1DB9BE24DD47B90EBF183F5AE334FB4196D5608F25"
+                    },
+                    {
+                        "Path":  "C:\\Users\\lakha\\Videos\\SideNote-Android-main\\SideNote-Android.apk",
+                        "Hash":  "21B411015E44A0238FBBDC1DB9BE24DD47B90EBF183F5AE334FB4196D5608F25"
+                    },
+                    {
+                        "Path":  "C:\\Users\\lakha\\Videos\\SideNote-Android-main\\SideNote-Android-main\\app-debug.apk",
+                        "Hash":  "21B411015E44A0238FBBDC1DB9BE24DD47B90EBF183F5AE334FB4196D5608F25"
+                    }
+                ]
+}

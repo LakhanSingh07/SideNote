@@ -23,6 +23,7 @@ object Ui {
             else -> (c.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
         }
     }
+    fun motionDuration(c:Context,millis:Long):Long = if(c.getSharedPreferences("overlay_ui",0).getBoolean("reduce_motion",false)||!android.animation.ValueAnimator.areAnimatorsEnabled())0L else millis
     val ink: Int get() = if (dark) Color.rgb(244,243,238) else Color.rgb(32,36,38)
     val muted: Int get() = if (dark) Color.rgb(174,177,181) else Color.rgb(119,123,125)
     val surface: Int get() = if (dark) Color.rgb(20,23,26) else Color.rgb(250,248,240)

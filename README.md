@@ -1,6 +1,10 @@
 # SideNote — Android & Windows Cross-Platform Ecosystem
 
-SideNote is an intelligent, always-nearby notes companion designed with tactile pastel sticky-note aesthetics, smart screen-edge peeking interactions, and end-to-end encrypted LAN synchronization between Android and Windows.
+SideNote is an intelligent, always-nearby notes companion designed with tactile pastel sticky-note aesthetics, smart screen-edge peeking interactions, and paired LAN synchronization between Android and Windows.
+
+## Current files and sync build
+
+Use `SideNote-Android-v3.1.0.apk` and `sidenote-windows.exe` for note attachments and resumable Android/Windows file transfer. See [Files and sync](FILES-AND-SYNC.md) for setup, verified behavior and current limits. The older setup installers and source archives listed below are historical artifacts and do not include this update.
 
 ---
 

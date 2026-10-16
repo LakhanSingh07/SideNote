@@ -297,7 +297,7 @@ object NoteEditor {
             val contents = if (isChecklistMode && isInteractiveListMode) bodyContent else RichTextFormatter.toStorageString(body.text)
             if (name.isBlank() && contents.isBlank()) { dirty = false; return true }
             return try {
-                store.save(original.copy(
+                store.save((store.all().firstOrNull { it.id==original.id } ?: original).copy(
                     title = name,
                     body = contents,
                     color = chosen,
@@ -593,6 +593,14 @@ object NoteEditor {
 
         toolbarScroll.addView(toolbar)
         root.addView(toolbarScroll)
+        root.addView(Ui.button(context,"Files (${original.attachments.size})") {
+            dirty=true
+            if(persist()) {
+                if(store.all().none {it.id==original.id})store.save(original)
+                context.startActivity(Intent(context,AttachmentActivity::class.java).putExtra("id",original.id).apply {if(context !is Activity)addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)})
+                d.dismiss();done()
+            }
+        })
         root.addView(Ui.space(context, 10))
 
         // Checkbox mode toggle logic
@@ -670,7 +678,7 @@ object NoteEditor {
             }
             delete.setOnClickListener {
                 AlertDialog.Builder(context).setTitle("Delete this note?")
-                    .setMessage("This cannot be undone.")
+                    .setMessage("You can restore this note from Trash in Settings.")
                     .setNegativeButton("Keep", null).setPositiveButton("Delete") { _, _ ->
                         pending?.let(handler::removeCallbacks)
                         try {

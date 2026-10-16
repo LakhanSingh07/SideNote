@@ -26,25 +26,33 @@ class SyncStore(context: Context) {
         }
     }
 
-    @Synchronized fun recordUpsert(note: Note) {
+    fun recordUpsert(note: Note): Unit  = synchronized(NOTE_STORE_LOCK) {
         appendChange(note.id, "upsert", noteToJson(note).toString(), note.updatedAt)
+        recordOrigin(note.id, deviceId)
+        val tombs = JSONObject(prefs.getString("tombstones", "{}") ?: "{}"); tombs.remove(note.id)
+        check(prefs.edit().putString("tombstones",tombs.toString()).commit())
     }
 
-    @Synchronized fun recordDelete(noteId: String) {
-        appendChange(noteId, "delete", null, System.currentTimeMillis())
+    fun recordDelete(noteId: String, baseUpdatedAt: Long? = null): Unit  = synchronized(NOTE_STORE_LOCK) {
+        val now = System.currentTimeMillis()
+        appendChange(noteId, "delete", null, now, baseUpdatedAt)
+        recordTombstone(noteId, deviceId, now)
     }
 
-    @Synchronized fun exportBundle(afterSeq: Long = 0L): String {
+    fun exportBundle(afterSeq: Long = 0L): String = synchronized(NOTE_STORE_LOCK) {
         val changes = loadChanges().filter { it.seq > afterSeq }.take(500)
         val arr = JSONArray()
         for (ch in changes) {
-            arr.put(JSONObject().apply {
+            val entry = JSONObject().apply {
                 put("seq", ch.seq)
                 put("entityId", ch.noteId)
                 put("operation", ch.operation)
                 if (ch.payload != null) put("payload", ch.payload) else put("payload", JSONObject.NULL)
                 put("changedAt", ch.changedAt)
-            })
+                if(ch.baseUpdatedAt != null)put("baseUpdatedAt",ch.baseUpdatedAt)
+            }
+            if(arr.length() > 0 && arr.toString().toByteArray().size + entry.toString().toByteArray().size > 4_500_000) break
+            arr.put(entry)
         }
         return JSONObject().apply {
             put("protocolVersion", 1)
@@ -55,79 +63,92 @@ class SyncStore(context: Context) {
 
     data class ImportResult(val applied: Int, val skipped: Int, val conflicts: Int)
 
-    @Synchronized fun importBundle(bundleJson: String): ImportResult {
-        require(bundleJson.length <= 5_000_000) { "Bundle exceeds 5 MB limit" }
+    fun importBundle(bundleJson: String): ImportResult = synchronized(NOTE_STORE_LOCK) {
+        require(bundleJson.toByteArray(Charsets.UTF_8).size <= 5_000_000) { "Bundle exceeds 5 MB limit" }
         val bundle = JSONObject(bundleJson)
         require(bundle.optInt("protocolVersion", 0) == 1) { "Unsupported protocol version" }
         val origin = bundle.getString("originDevice")
-        require(origin.isNotBlank() && origin.length <= 64 && origin != deviceId) { "Invalid origin device" }
+        require(UUID.fromString(origin).toString() == origin && origin != deviceId) { "Invalid origin device" }
         val changes = bundle.getJSONArray("changes")
         require(changes.length() <= 500) { "Bundle too large" }
-        val seen = loadSeenChanges(origin)
-        val currentNotes = try { notesStore.all().associateBy { it.id } } catch (_: Exception) { emptyMap() }
-        val tombstones = loadTombstones()
-        val conflicts = loadConflicts().toMutableList()
-        var applied = 0
-        var skipped = 0
-        var conflictCount = 0
+        // Validate the entire page before writing anything to disk.
         var prevSeq = 0L
         for (i in 0 until changes.length()) {
             val ch = changes.getJSONObject(i)
             val seq = ch.getLong("seq")
-            require(seq > prevSeq && seq > 0) { "Non-monotonic seq" }
-            prevSeq = seq
-            val noteId = ch.getString("entityId")
-            require(noteId.isNotBlank() && noteId.length <= 160) { "Invalid note ID" }
-            val operation = ch.getString("operation")
-            require(operation == "upsert" || operation == "delete") { "Unknown operation" }
-            if (seen.contains(seq)) {
-                skipped++
-                continue
+            require(seq > prevSeq && seq > 0) { "Non-monotonic seq" }; prevSeq = seq
+            val id = ch.getString("entityId")
+            require(id.isNotBlank() && id.length <= 128) { "Invalid note ID" }
+            when(ch.getString("operation")) {
+                "upsert" -> {
+                    val n = jsonToNote(JSONObject(ch.getString("payload")))
+                    require(n.id == id && n.updatedAt == ch.getLong("changedAt")) { "Invalid note revision" }
+                    require(n.title.length <= 2000 && n.body.length <= 200_000 && n.color in 0..5) { "Invalid note fields" }
+                }
+                "delete" -> require(ch.isNull("payload")) { "Delete must not include a payload" }
+                else -> error("Unknown operation")
             }
-            if (operation == "upsert") {
-                val payloadStr = ch.optString("payload", "").takeIf { it.isNotEmpty() }
-                    ?: throw IllegalArgumentException("Upsert missing payload")
-                val remoteNote = jsonToNote(JSONObject(payloadStr))
-                require(remoteNote.id == noteId) { "Payload ID mismatch" }
-                val local = currentNotes[noteId]
-                val tomb = tombstones[noteId]
-                val sameLineage = loadOrigin(noteId) == origin
-                val isConflict = (tomb != null && tomb.third != origin) ||
-                        (local != null && !sameLineage && local.updatedAt != remoteNote.updatedAt)
-                if (isConflict) {
-                    conflicts.add(listOf(noteId, origin, seq, operation, payloadStr, ch.getLong("changedAt")))
-                    conflictCount++
-                } else {
-                    notesStore.saveDirect(remoteNote)
-                    recordOrigin(noteId, origin)
-                    applied++
-                }
+        }
+        val seen = loadSeenChanges(origin)
+        val currentNotes = notesStore.all().associateBy { it.id }.toMutableMap()
+        val tombstones = JSONObject(prefs.getString("tombstones", "{}") ?: "{}")
+        val origins = JSONObject(prefs.getString("origins", "{}") ?: "{}")
+        val conflicts = loadConflicts().toMutableList()
+        var applied = 0; var skipped = 0; var conflictCount = 0
+        for (i in 0 until changes.length()) {
+            val ch = changes.getJSONObject(i); val seq = ch.getLong("seq")
+            if (seen.contains(seq)) { skipped++; continue }
+            val id = ch.getString("entityId"); val operation = ch.getString("operation")
+            val local = currentNotes[id]
+            val remote = if(operation == "upsert") jsonToNote(JSONObject(ch.getString("payload"))) else null
+            val sameLineage = origins.optString(id) == origin
+            val sameRevision = local?.updatedAt == ch.getLong("changedAt")
+            val base = remote?.baseUpdatedAt ?: if(ch.isNull("baseUpdatedAt")) null else ch.getLong("baseUpdatedAt")
+            val basedOnLocal = base != null && base == local?.updatedAt
+            val tomb = tombstones.optJSONObject(id)
+            val divergent = local != null && !sameLineage && !sameRevision && !basedOnLocal
+            val conflictingTomb = remote != null && tomb != null && tomb.optString("origin") != origin
+            if (divergent || conflictingTomb) {
+                conflicts.add(listOf(id, origin, seq, operation, remote?.let { ch.getString("payload") }, ch.getLong("changedAt")))
+                conflictCount++
+            } else if(remote != null) {
+                currentNotes[id] = remote; origins.put(id, origin); tombstones.remove(id); applied++
             } else {
-                val local = currentNotes[noteId]
-                val tomb = tombstones[noteId]
-                val isConflict = tomb != null && tomb.third != origin
-                if (isConflict) {
-                    conflicts.add(listOf(noteId, origin, seq, operation, null, ch.getLong("changedAt")))
-                    conflictCount++
-                } else {
-                    if (local != null) {
-                        notesStore.delete(noteId)
-                        applied++
-                    }
-                    recordTombstone(noteId, origin, ch.getLong("changedAt"))
-                }
+                currentNotes.remove(id); origins.remove(id)
+                tombstones.put(id, JSONObject().put("origin",origin).put("deletedAt",ch.getLong("changedAt"))); applied++
             }
             seen.add(seq)
         }
-        saveSeenChanges(origin, seen)
-        saveConflicts(conflicts)
+        notesStore.replaceDirect(currentNotes.values.toList(),notesStore.all().filter {it.id !in currentNotes})
+        val conflictArray = JSONArray()
+        conflicts.forEach { c -> conflictArray.put(JSONObject().put("noteId",c[0]).put("originDevice",c[1]).put("originSeq",c[2]).put("operation",c[3]).put("payload",c[4] ?: JSONObject.NULL).put("changedAt",c[5])) }
+        check(prefs.edit().putString("seen_$origin",JSONArray(seen.sorted()).toString())
+            .putString("origins",origins.toString()).putString("tombstones",tombstones.toString())
+            .putString("conflicts",conflictArray.toString()).commit()) { "Could not persist sync state" }
         return ImportResult(applied, skipped, conflictCount)
+    }
+
+    fun ensureLocalSnapshot(): Unit = synchronized(NOTE_STORE_LOCK) {
+        val recorded=loadChanges().map {it.noteId}.toHashSet()
+        notesStore.all().filter {it.id !in recorded && loadOrigin(it.id)==null}.forEach {recordUpsert(it)}
+    }
+
+    fun ensurePeerSnapshot(peer:String):Unit = synchronized(NOTE_STORE_LOCK) {
+        if(prefs.getBoolean("snapshot_v2_$peer",false))return@synchronized
+        notesStore.all().forEach {appendChange(it.id,"upsert",noteToJson(it.copy(baseUpdatedAt=it.updatedAt)).toString(),it.updatedAt)}
+        check(prefs.edit().putBoolean("snapshot_v2_$peer",true).commit())
+    }
+
+    fun uploadCursor(peerDeviceId: String): Long = prefs.getLong("upload_cursor_$peerDeviceId", 0L)
+    fun advanceUploadCursor(peerDeviceId: String, seq: Long) {
+        require(seq >= 0) { "Invalid upload cursor" }
+        if(seq > uploadCursor(peerDeviceId)) check(prefs.edit().putLong("upload_cursor_$peerDeviceId",seq).commit())
     }
 
     fun peerCursor(peerDeviceId: String): Long = prefs.getLong("cursor_$peerDeviceId", 0L)
     fun advancePeerCursor(peerDeviceId: String, seq: Long) {
         if (seq > peerCursor(peerDeviceId)) {
-            prefs.edit().putLong("cursor_$peerDeviceId", seq).apply()
+            check(prefs.edit().putLong("cursor_$peerDeviceId", seq).commit())
         }
     }
 
@@ -155,47 +176,56 @@ class SyncStore(context: Context) {
 
     fun resolveConflict(noteId: String, keepLocal: Boolean) {
         val conflicts = loadConflicts().toMutableList()
-        val match = conflicts.firstOrNull { (it[0] as String) == noteId } ?: return
+        val match = conflicts.lastOrNull { (it[0] as String) == noteId } ?: return
+        if(keepLocal){
+            notesStore.all().firstOrNull {it.id==noteId}?.let {local->
+                if(match[3]=="delete") {notesStore.save(local.copy(id=UUID.randomUUID().toString(),baseUpdatedAt=null));notesStore.deleteDirect(noteId)}
+                else notesStore.saveResolved(local,(match[5] as Number).toLong())
+            }
+        }
         if (!keepLocal) {
             val operation = match[3] as String
             val payload = match[4] as? String
             if (operation == "upsert" && payload != null) {
+                notesStore.all().firstOrNull {it.id==noteId}?.let {local->notesStore.replaceDirect(notesStore.all(),listOf(local))}
                 notesStore.saveDirect(jsonToNote(JSONObject(payload)))
+                recordOrigin(noteId,match[1] as String)
             } else if (operation == "delete") {
-                notesStore.delete(noteId)
+                notesStore.deleteDirect(noteId)
             }
         }
         conflicts.removeAll { (it[0] as String) == noteId }
         saveConflicts(conflicts)
     }
 
-    private data class ChangeEntry(val seq: Long, val noteId: String, val operation: String, val payload: String?, val changedAt: Long)
+    private data class ChangeEntry(val seq: Long, val noteId: String, val operation: String, val payload: String?, val changedAt: Long, val baseUpdatedAt: Long? = null)
 
     private fun loadChanges(): List<ChangeEntry> {
         val arr = try { JSONArray(prefs.getString("changes", "[]") ?: "[]") } catch (_: Exception) { JSONArray() }
         return (0 until arr.length()).mapNotNull {
             runCatching {
                 val o = arr.getJSONObject(it)
-                ChangeEntry(o.getLong("seq"), o.getString("noteId"), o.getString("operation"), if (o.isNull("payload")) null else o.getString("payload"), o.getLong("changedAt"))
+                ChangeEntry(o.getLong("seq"), o.getString("noteId"), o.getString("operation"), if (o.isNull("payload")) null else o.getString("payload"), o.getLong("changedAt"), if(o.isNull("baseUpdatedAt")) null else o.getLong("baseUpdatedAt"))
             }.getOrNull()
         }
     }
 
-    private fun appendChange(noteId: String, operation: String, payload: String?, changedAt: Long) {
+    private fun appendChange(noteId: String, operation: String, payload: String?, changedAt: Long, baseUpdatedAt: Long? = null) {
         val entries = loadChanges().toMutableList()
         val seq = (entries.maxOfOrNull { it.seq } ?: 0L) + 1L
-        entries.add(ChangeEntry(seq, noteId, operation, payload, changedAt))
+        entries.add(ChangeEntry(seq, noteId, operation, payload, changedAt, baseUpdatedAt))
         val arr = JSONArray()
-        entries.takeLast(10_000).forEach { e ->
+        entries.forEach { e ->
             arr.put(JSONObject().apply {
                 put("seq", e.seq)
                 put("noteId", e.noteId)
                 put("operation", e.operation)
                 if (e.payload != null) put("payload", e.payload) else put("payload", JSONObject.NULL)
                 put("changedAt", e.changedAt)
+                if(e.baseUpdatedAt != null)put("baseUpdatedAt",e.baseUpdatedAt)
             })
         }
-        prefs.edit().putString("changes", arr.toString()).apply()
+        check(prefs.edit().putString("changes", arr.toString()).commit()) { "Could not persist change log" }
     }
 
     private fun loadTombstones(): Map<String, Triple<String, Long, String>> {
@@ -240,7 +270,7 @@ class SyncStore(context: Context) {
 
     private fun saveSeenChanges(origin: String, seen: Set<Long>) {
         val arr = JSONArray()
-        seen.sorted().takeLast(5000).forEach { arr.put(it) }
+        seen.sorted().forEach { arr.put(it) }
         prefs.edit().putString("seen_$origin", arr.toString()).apply()
     }
 
@@ -288,6 +318,8 @@ class SyncStore(context: Context) {
             put("pinned", note.pinned)
             put("archived", note.archived)
             put("reminderAt", note.reminderAt)
+            put("attachments", NoteAttachment.toArray(note.attachments))
+            put("baseUpdatedAt", note.baseUpdatedAt ?: JSONObject.NULL)
         }
 
         fun jsonToNote(o: JSONObject): Note = Note(
@@ -299,7 +331,9 @@ class SyncStore(context: Context) {
             updatedAt = o.optLong("updatedAt", System.currentTimeMillis()),
             pinned = o.optBoolean("pinned", false),
             archived = o.optBoolean("archived", false),
-            reminderAt = o.optLong("reminderAt", 0L)
+            reminderAt = o.optLong("reminderAt", 0L),
+            attachments = NoteAttachment.fromArray(o.optJSONArray("attachments")),
+            baseUpdatedAt = if(o.isNull("baseUpdatedAt")) null else o.getLong("baseUpdatedAt")
         )
     }
 }
