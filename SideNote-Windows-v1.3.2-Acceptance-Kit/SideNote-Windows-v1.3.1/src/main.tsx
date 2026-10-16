@@ -752,20 +752,31 @@ function EdgeDock() {
     }, 150);
   };
 
-  // Window-level tracking: immediately collapse dock when pointer leaves window area
+  // Window-level tracking: immediately collapse dock when pointer leaves window area or moves into transparent background
   useEffect(() => {
     const onWinLeave = () => {
       if (!draggingIdRef.current) {
         collapseDock();
       }
     };
+    const onGlobalPointerMove = (e: PointerEvent) => {
+      if (draggingIdRef.current) return;
+      if (!isExpandedRef.current && !openNoteId) return;
+      const target = e.target as HTMLElement | null;
+      if (!target || !target.closest('.dock, .tab, .fab, .folder, .card')) {
+        collapseDock();
+      }
+    };
+
+    window.addEventListener('pointermove', onGlobalPointerMove);
     window.addEventListener('pointerleave', onWinLeave);
     window.addEventListener('blur', onWinLeave);
     return () => {
+      window.removeEventListener('pointermove', onGlobalPointerMove);
       window.removeEventListener('pointerleave', onWinLeave);
       window.removeEventListener('blur', onWinLeave);
     };
-  }, []);
+  }, [openNoteId]);
 
   const showToast = (text: string, undoNote?: Note) => {
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
@@ -943,11 +954,12 @@ function EdgeDock() {
         showToast('✨ Note placed on desktop');
         await openFloatingNote(n, dropX, dropY);
       } else {
-        // User dropped note back inside the dock
+        // User dropped note back inside the dock: cleanly fold card back so it is NEVER cropped
         setDraggingId(null);
         draggingIdRef.current = null;
         setDragTop(null);
         setDragLeft(null);
+        setOpenNoteId(null);
 
         isExpandedRef.current = false;
         if (native) {
@@ -964,6 +976,7 @@ function EdgeDock() {
       draggingIdRef.current = null;
       setDragTop(null);
       setDragLeft(null);
+      setOpenNoteId(null);
       isExpandedRef.current = false;
       if (native) {
         await adjustDockWidth(false);
