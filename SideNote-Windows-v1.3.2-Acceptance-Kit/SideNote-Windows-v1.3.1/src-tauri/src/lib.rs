@@ -179,7 +179,7 @@ fn resolve_sync_conflict(db:State<'_,Database>, conflict_id:i64, action:String) 
 fn set_window_bounds_atomic(window: tauri::WebviewWindow, x: i32, y: i32, width: i32, height: i32) -> Result<(), String> {
   #[cfg(windows)]
   {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER, SWP_NOOWNERZORDER};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER, SWP_NOOWNERZORDER, SWP_NOCOPYBITS};
     let hwnd = window.hwnd().map_err(|e| e.to_string())?;
     unsafe {
       SetWindowPos(
@@ -189,7 +189,7 @@ fn set_window_bounds_atomic(window: tauri::WebviewWindow, x: i32, y: i32, width:
         y,
         width,
         height,
-        SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER,
+        SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOCOPYBITS,
       );
     }
   }

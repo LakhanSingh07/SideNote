@@ -599,6 +599,12 @@ function EdgeDock() {
   const isExpandedRef = useRef(false);
   const isBusyRef = useRef(false);
   const collapseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [isMounted, setIsMounted] = useState(false);
+
+  useEffect(() => {
+    const t = setTimeout(() => setIsMounted(true), 400);
+    return () => clearTimeout(t);
+  }, []);
 
   // Drag reordering state
   const [customOrder, setCustomOrder] = useState<string[]>(() => {
@@ -698,14 +704,21 @@ function EdgeDock() {
       clearTimeout(collapseTimerRef.current);
       collapseTimerRef.current = null;
     }
-    if (noteIdToOpen) {
-      setOpenNoteId(noteIdToOpen);
+    // If already expanded, just switch active note directly without window resize
+    if (isExpandedRef.current) {
+      if (noteIdToOpen) setOpenNoteId(noteIdToOpen);
+      return;
     }
-    if (isExpandedRef.current || isBusyRef.current) return;
+    if (isBusyRef.current) return;
     isBusyRef.current = true;
     try {
+      // 1. Expand OS window bounds first with SWP_NOCOPYBITS so full width is available
       await adjustDockWidth(true);
       isExpandedRef.current = true;
+      // 2. Open the note card cleanly without clipped double/ghost frames
+      if (noteIdToOpen) {
+        setOpenNoteId(noteIdToOpen);
+      }
     } finally {
       isBusyRef.current = false;
     }
@@ -724,9 +737,10 @@ function EdgeDock() {
       // 1. Fold card back into tab
       setOpenNoteId(null);
 
-      // 2. Shrink window back to narrow 85px width so desktop behind is completely unblocked
+      // 2. Shrink window back to narrow width after card finishes folding (~200ms)
       setTimeout(async () => {
         if (draggingIdRef.current) return;
+        if (collapseTimerRef.current) return; // Pointer re-entered
         isBusyRef.current = true;
         try {
           await adjustDockWidth(false);
@@ -734,8 +748,8 @@ function EdgeDock() {
         } finally {
           isBusyRef.current = false;
         }
-      }, 160);
-    }, 100);
+      }, 200);
+    }, 150);
   };
 
   // Window-level tracking: immediately collapse dock when pointer leaves window area
@@ -992,7 +1006,7 @@ function EdgeDock() {
     <>
       <FigmaSvgDefs />
       <div
-        className="frame"
+        className={`frame ${isMounted ? 'is-mounted' : ''}`}
         ref={frameRef}
         id="frame"
         onPointerEnter={() => {
