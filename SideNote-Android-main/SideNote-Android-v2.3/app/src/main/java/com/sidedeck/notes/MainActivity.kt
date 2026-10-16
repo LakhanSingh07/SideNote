@@ -341,9 +341,15 @@ class MainActivity : Activity() {
         row.addView(logoImg, LinearLayout.LayoutParams(Ui.dp(this, 160), Ui.dp(this, 48)))
         row.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
 
-        val tag = Ui.text(this, "LOCAL • PRIVATE", 10f, true, Ui.muted).apply {
-            background = Ui.bg(Ui.subtle, Ui.dp(this@MainActivity, 8).toFloat())
-            setPadding(Ui.dp(this@MainActivity, 8), Ui.dp(this@MainActivity, 4), Ui.dp(this@MainActivity, 8), Ui.dp(this@MainActivity, 4))
+        val isPaired = LanSyncManager.isPaired(this)
+        val pcName = LanSyncManager.getPairedPcName(this) ?: "Windows PC"
+        val syncLabel = if (isPaired) "🟢 $pcName" else "📶 Windows Sync"
+        val tag = Ui.text(this, syncLabel, 11.5f, true, if (isPaired) Color.rgb(46, 125, 50) else Ui.violet).apply {
+            background = Ui.bg(if (isPaired) 0x224CAF50.toInt() else Ui.subtle, Ui.dp(this@MainActivity, 12).toFloat(), if (isPaired) 0x664CAF50.toInt() else Ui.border)
+            setPadding(Ui.dp(this@MainActivity, 12), Ui.dp(this@MainActivity, 6), Ui.dp(this@MainActivity, 12), Ui.dp(this@MainActivity, 6))
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { showPairingDialog() }
         }
         row.addView(tag)
         body.addView(row)
@@ -352,7 +358,43 @@ class MainActivity : Activity() {
     private fun showNotes(archived: Boolean) {
         shell(!archived, if (archived) "Archive" else "Notes") { body ->
             topBrand(body)
-            body.addView(Ui.space(this, 24))
+            body.addView(Ui.space(this, 16))
+
+            // Prominent Wi-Fi sync banner
+            val isPaired = LanSyncManager.isPaired(this)
+            val pcName = LanSyncManager.getPairedPcName(this) ?: "Windows PC"
+            val bannerCard = Ui.surfaceCard(this, if (isPaired) (if (Ui.dark) 0xFF142417.toInt() else 0xFFEAF7EB.toInt()) else (if (Ui.dark) 0xFF231E33.toInt() else 0xFFF3EEFD.toInt())).apply {
+                isClickable = true
+                isFocusable = true
+                setOnClickListener {
+                    if (isPaired) {
+                        Toast.makeText(this@MainActivity, "Syncing with $pcName...", Toast.LENGTH_SHORT).show()
+                        LanSyncManager.triggerSync(this@MainActivity) { _, msg ->
+                            Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
+                            navigate(page)
+                        }
+                    } else {
+                        showPairingDialog()
+                    }
+                }
+            }
+            val bannerRow = Ui.row(this).apply { gravity = Gravity.CENTER_VERTICAL }
+            val bannerIcon = Ui.text(this, if (isPaired) "🟢" else "📶", 18f)
+            bannerRow.addView(bannerIcon)
+            bannerRow.addView(Ui.space(this, 10))
+            val bannerTexts = Ui.column(this)
+            if (isPaired) {
+                bannerTexts.addView(Ui.text(this, "Connected to $pcName (Tap to Sync Now)", 13.5f, true, if (Ui.dark) Color.WHITE else Color.rgb(27, 94, 32)))
+                bannerTexts.addView(Ui.text(this, "Notes sync automatically over Wi-Fi • Tap to force sync", 11.5f, false, Ui.muted))
+            } else {
+                bannerTexts.addView(Ui.text(this, "Connect with Windows PC (Tap to Enter PIN)", 13.5f, true, Ui.violet))
+                bannerTexts.addView(Ui.text(this, "Enter 4-digit PIN to sync notes over same Wi-Fi (No QR required)", 11.5f, false, Ui.muted))
+            }
+            bannerRow.addView(bannerTexts, LinearLayout.LayoutParams(0, -2, 1f))
+            bannerCard.addView(bannerRow)
+            body.addView(bannerCard)
+            body.addView(Ui.space(this, 16))
+
             body.addView(Ui.editorial(this, if (archived) "Kept for later." else "Make space for\nyour little thoughts.", 34f))
             body.addView(Ui.space(this, 8))
             body.addView(Ui.text(this, if (archived) "Notes you tucked away." else "A calm place for everything on your mind.", 14f, false, Ui.muted))

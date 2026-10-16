@@ -678,8 +678,8 @@ function EdgeDock() {
       const s = Math.min(0.46, Math.max(0.36, (targetHeight - 24) / 1340));
       const minOpenW = Math.round(580 * s);
       const openWidth = Math.max(minOpenW, Math.round(760 * s * widthFactor));
-      // When collapsed, width strictly matches peeking tabs (199 * s ~ 85px) so desktop behind is 100% clickable
-      const collapsedWidth = Math.round(202 * s);
+      // When collapsed, width strictly matches peeking tabs (192 * s ~ 80px) so desktop behind is 100% clickable
+      const collapsedWidth = Math.round(192 * s);
       const targetWidth = isOpen ? Math.max(openWidth, collapsedWidth) : collapsedWidth;
 
       // Win32 SetWindowPos expects physical device pixels: convert logical to physical
@@ -1027,8 +1027,6 @@ function EdgeDock() {
         }}
         onPointerLeave={collapseDock}
       >
-        <div className="dock" />
-
         <div id="tabs" className={draggingId ? 'is-dragging' : ''}>
           {dockNotes.map((n, idx) => {
             const isOpen = openNoteId === n.id;
